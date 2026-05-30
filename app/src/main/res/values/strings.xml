@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">ГолосРуки</string>
+    <string name="accessibility_description">Управление телефоном голосом — нажатия, свайпы, навигация, ввод текста, SOS. Для людей с ограниченными возможностями.</string>
+</resources>

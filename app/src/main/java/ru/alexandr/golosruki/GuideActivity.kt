@@ -33,7 +33,7 @@ class GuideActivity : ComponentActivity() {
         section("👆 Нажатия по номерам", listOf(
             "«номера» — пронумеровать кнопки на экране",
             "«нажми 5» — нажать элемент №5",
-            "«долгое нажатие 5» — удержание",
+            "«долгое нажатие 5» — удержание (появившееся меню сразу пронумеруется — называйте номер)",
             "«двойное нажатие 5» — двойной тап",
             "«скрой» — убрать номера"
         ), col)
@@ -55,7 +55,7 @@ class GuideActivity : ComponentActivity() {
         ), col)
 
         section("📞 Контакты и приложения", listOf(
-            "«позвони жене» — звонок (настраивается в Настройках)",
+            "«позвони жене» — звонок (только контакты, заданные в Настройках)",
             "«открой телеграм» — запуск приложения",
             "Свои команды: в Настройках задайте слово и выберите приложение — напр. «карта» → открыть навигатор"
         ), col)
@@ -87,7 +87,7 @@ class GuideActivity : ComponentActivity() {
         ), col)
 
         section("🆘 Помощь", listOf(
-            "«сос» / «спасите» / «тревога» — звонок + СМС с геолокацией на SOS-номер",
+            "«сос» + код (если задан в Настройках), напр. «сос 911» — звонок + СМС с геолокацией",
             "«помощь» — краткая подсказка на экране"
         ), col)
 
@@ -101,7 +101,7 @@ class GuideActivity : ComponentActivity() {
 
         section("ℹ️ Разработчик", listOf(
             "Донбасс Реклама — donbassreklama.ru",
-            "Версия 3.9"
+            "Версия 4.0"
         ), col)
 
         setContentView(ScrollView(this).apply { addView(col) })
@@ -109,8 +109,20 @@ class GuideActivity : ComponentActivity() {
 
     private fun section(header: String, items: List<String>, col: LinearLayout) {
         val card = UiKit.card(this)
-        card.addView(UiKit.sectionHeader(this, header))
-        for (i in items) card.addView(UiKit.body(this, "•  $i"))
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = android.view.View.GONE
+        }
+        val head = UiKit.sectionHeader(this, "▸  $header")
+        head.isClickable = true
+        head.setOnClickListener {
+            val open = body.visibility == android.view.View.VISIBLE
+            body.visibility = if (open) android.view.View.GONE else android.view.View.VISIBLE
+            head.text = (if (open) "▸  " else "▾  ") + header
+        }
+        for (i in items) body.addView(UiKit.body(this, "•  $i"))
+        card.addView(head)
+        card.addView(body)
         col.addView(card)
     }
 }

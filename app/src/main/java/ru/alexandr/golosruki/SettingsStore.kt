@@ -20,6 +20,9 @@ object SettingsStore {
     fun getSosText(ctx: Context): String = p(ctx).getString("sos_text", "") ?: ""
     fun setSosText(ctx: Context, v: String) = p(ctx).edit().putString("sos_text", v).apply()
 
+    fun getSosPin(ctx: Context): String = p(ctx).getString("sos_pin", "") ?: ""
+    fun setSosPin(ctx: Context, v: String) = p(ctx).edit().putString("sos_pin", v.trim()).apply()
+
     fun getIgnoreMedia(ctx: Context): Boolean = p(ctx).getBoolean("ignore_media", true)
     fun setIgnoreMedia(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("ignore_media", v).apply()
 

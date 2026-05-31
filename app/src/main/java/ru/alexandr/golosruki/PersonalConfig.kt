@@ -9,49 +9,20 @@ data class PersonalConfig(
     val apps: Map<String, String>,        // название -> package («открой X»)
     val sosNumber: String,
     val sosText: String,
-    val customApps: Map<String, String> = emptyMap()  // своя фраза -> package
+    val customApps: Map<String, String> = emptyMap(),  // своя фраза -> package
+    val sosPin: String = ""               // подтверждение для SOS
 ) {
     companion object {
         fun load(context: Context): PersonalConfig {
             val asset = loadAsset(context)
-            // объединяем: контакты телефона + из JSON, сверху — заданные в приложении (приоритет)
-            val merged = LinkedHashMap<String, String>()
-            merged.putAll(asset.contacts)
-            merged.putAll(loadDeviceContacts(context))
-            merged.putAll(SettingsStore.getContacts(context))
+            // ТОЛЬКО заданные в приложении контакты (без телефонной книги — чтобы не путаться)
+            val saved = SettingsStore.getContacts(context)
+            val contacts = if (saved.isNotEmpty()) saved else asset.contacts
             val sosNum = SettingsStore.getSosNumber(context).ifBlank { asset.sosNumber }
             val sosTxt = SettingsStore.getSosText(context).ifBlank { asset.sosText }
             val customApps = SettingsStore.getOpenCommands(context)
-            return PersonalConfig(merged, asset.apps, sosNum, sosTxt, customApps)
-        }
-
-        /** Контакты из телефонной книги (если выдано разрешение). Ключ — имя в нижнем регистре. */
-        private fun loadDeviceContacts(context: Context): Map<String, String> {
-            try {
-                if (context.checkSelfPermission(android.Manifest.permission.READ_CONTACTS)
-                    != android.content.pm.PackageManager.PERMISSION_GRANTED) return emptyMap()
-                val out = LinkedHashMap<String, String>()
-                val uri = android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI
-                val cols = arrayOf(
-                    android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                    android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER
-                )
-                context.contentResolver.query(uri, cols, null, null, null)?.use { c ->
-                    val ni = 0; val pi = 1
-                    var count = 0
-                    while (c.moveToNext() && count < 250) {
-                        val name = c.getString(ni) ?: continue
-                        val number = c.getString(pi) ?: continue
-                        // добавляем полное имя и первое слово (имя)
-                        val full = name.trim().lowercase()
-                        val first = full.split(" ").firstOrNull() ?: continue
-                        if (first.length >= 2 && first.all { it.isLetter() } && !out.containsKey(first)) {
-                            out[first] = number; count++
-                        }
-                    }
-                }
-                return out
-            } catch (e: Exception) { return emptyMap() }
+            val sosPin = SettingsStore.getSosPin(context).lowercase().trim()
+            return PersonalConfig(contacts, asset.apps, sosNum, sosTxt, customApps, sosPin)
         }
 
         private fun loadAsset(context: Context): PersonalConfig {

@@ -17,6 +17,7 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var idle: EditText
     private lateinit var sosNum: EditText
     private lateinit var sosTxt: EditText
+    private lateinit var sosPin: EditText
     private lateinit var ignoreMediaCheck: android.widget.CheckBox
     private lateinit var vibrateCheck: android.widget.CheckBox
     private lateinit var keepScreenCheck: android.widget.CheckBox
@@ -91,6 +92,9 @@ class SettingsActivity : ComponentActivity() {
             it.setText(if (t.isBlank()) "SOS! Нужна срочная помощь." else t)
         }
         s.addView(sosTxt)
+        s.addView(UiKit.body(this, "Код-подтверждение (слово или число). Если задан — SOS только по «сос + код», напр. «сос крапива» или «сос 911». Пусто — без защиты:"))
+        sosPin = field(InputType.TYPE_CLASS_TEXT).also { it.setText(SettingsStore.getSosPin(this)) }
+        s.addView(sosPin)
         col.addView(s)
 
         val c = UiKit.card(this)
@@ -137,11 +141,12 @@ class SettingsActivity : ComponentActivity() {
     private fun field(type: Int): EditText = EditText(this).apply {
         inputType = type
         textSize = 16f
+        setBackgroundResource(R.drawable.field_bg)
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-        )
-        val p = UiKit.dp(this@SettingsActivity, 8)
-        setPadding(p, p, p, p)
+        ).apply { topMargin = UiKit.dp(this@SettingsActivity, 4); bottomMargin = UiKit.dp(this@SettingsActivity, 8) }
+        val ph = UiKit.dp(this@SettingsActivity, 12)
+        setPadding(ph, ph, ph, ph)
     }
 
     private fun appLabel(pkg: String): String {
@@ -175,6 +180,7 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setIdle(this, idle.text.toString().toIntOrNull()?.coerceIn(10, 300) ?: 30)
         SettingsStore.setSosNumber(this, sosNum.text.toString())
         SettingsStore.setSosText(this, sosTxt.text.toString())
+        SettingsStore.setSosPin(this, sosPin.text.toString())
         SettingsStore.setIgnoreMedia(this, ignoreMediaCheck.isChecked)
         SettingsStore.setVibrate(this, vibrateCheck.isChecked)
         SettingsStore.setKeepScreen(this, keepScreenCheck.isChecked)

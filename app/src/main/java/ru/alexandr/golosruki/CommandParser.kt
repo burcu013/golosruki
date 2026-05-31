@@ -20,9 +20,13 @@ object CommandParser {
         // 0. Разблокировка («привет» после «Иван»)
         if (t.contains("привет")) return Command.Unlock
 
-        // 0.1 SOS — отдельные слова, чтобы не путать с «помощь» (это help)
-        if (t.contains("сос") || t.contains("спасите") || t.contains("тревога") || t.contains("помогите"))
-            return Command.Sos
+        // 0.1 SOS — с защитой от случайного вызова (если задан пин-слово/число)
+        if (t.contains("сос") || t.contains("спасите") || t.contains("тревога") || t.contains("помогите")) {
+            if (personal.sosPin.isBlank()) return Command.Sos          // защита не задана
+            if (t.contains(personal.sosPin)) return Command.Sos        // пин совпал
+            // пин задан, но не произнесён — НЕ вызываем SOS
+            return Command.Unknown
+        }
 
         // 0.15 Управление звонком и звуком
         if (t.contains("ответь") || t.contains("ответить") || t.contains("прими")) return Command.AnswerCall

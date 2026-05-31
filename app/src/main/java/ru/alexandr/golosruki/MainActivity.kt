@@ -40,14 +40,18 @@ class MainActivity : ComponentActivity() {
 
         val nav = UiKit.card(this)
         nav.addView(UiKit.sectionHeader(this, "Разделы"))
-        nav.addView(UiKit.iconButton(this, "📖  Гайд по управлению") { open(GuideActivity::class.java) })
-        nav.addView(UiKit.iconButton(this, "⚙️  Настройки под человека") { open(SettingsActivity::class.java) })
+        nav.addView(UiKit.row2(this,
+            UiKit.tile(this, "📖", "Гайд") { open(GuideActivity::class.java) },
+            UiKit.tile(this, "⚙️", "Настройки", R.drawable.btn_amber) { open(SettingsActivity::class.java) }
+        ))
         col.addView(nav)
 
         val diag = UiKit.card(this)
         diag.addView(UiKit.sectionHeader(this, "Диагностика"))
-        diag.addView(UiKit.iconButton(this, "🎤  Тест микрофона") { open(TestActivity::class.java) })
-        diag.addView(UiKit.iconButton(this, "📋  Логи") { open(LogActivity::class.java) })
+        diag.addView(UiKit.row2(this,
+            UiKit.tile(this, "🎤", "Тест микро") { open(TestActivity::class.java) },
+            UiKit.tile(this, "📋", "Логи") { open(LogActivity::class.java) }
+        ))
         col.addView(diag)
 
         col.addView(buildDevBanner())
@@ -109,18 +113,29 @@ class MainActivity : ComponentActivity() {
                 runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://donbassreklama.ru"))) }
             }
         }
-        b.addView(TextView(this).apply {
-            text = "Донбасс Реклама"; textSize = 22f; setTextColor(Color.WHITE)
+        // логотип + название в ряд
+        val headRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        }
+        headRow.addView(ImageView(this).apply {
+            setImageResource(R.drawable.dev_logo)
+            val s = UiKit.dp(this@MainActivity, 54)
+            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = UiKit.dp(this@MainActivity, 12) }
         })
+        headRow.addView(TextView(this).apply {
+            text = "Донбасс Реклама"; textSize = 22f; setTextColor(Color.WHITE)
+            setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
+        })
+        b.addView(headRow)
         b.addView(TextView(this).apply {
-            text = "Вывески • реклама • разработка приложений"
+            text = "Рекламное агентство. Создание приложений и сайтов, интеграция бизнеса с AI, вывески и реклама."
             textSize = 14f; setTextColor(Color.parseColor("#FFF3E6"))
-            setPadding(0, UiKit.dp(this@MainActivity, 2), 0, UiKit.dp(this@MainActivity, 8))
+            setPadding(0, UiKit.dp(this@MainActivity, 8), 0, UiKit.dp(this@MainActivity, 10))
         })
         b.addView(TextView(this).apply {
             text = "  🌐  donbassreklama.ru  →  "
             textSize = 14f; setTextColor(Color.parseColor("#B8692E"))
-            setBackgroundResource(R.drawable.badge_bg)
+            setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
             setBackgroundColor(Color.WHITE)
             val pad = UiKit.dp(this@MainActivity, 8)
             setPadding(pad * 2, pad, pad * 2, pad)
@@ -136,7 +151,7 @@ class MainActivity : ComponentActivity() {
         card.addView(UiKit.sectionHeader(this, "О приложении"))
         card.addView(UiKit.body(this, "ГолосРуки — голосовое управление смартфоном для людей с ограниченными возможностями."))
         card.addView(UiKit.body(this, "Офлайн-распознавание речи, без интернета и без передачи данных."))
-        card.addView(UiKit.body(this, "Версия 3.9 • Разработчик: Донбасс Реклама"))
+        card.addView(UiKit.body(this, "Версия 4.0 • Разработчик: Донбасс Реклама"))
         return card
     }
 
@@ -147,7 +162,6 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.CALL_PHONE,
             Manifest.permission.ANSWER_PHONE_CALLS,
-            Manifest.permission.READ_CONTACTS,
             Manifest.permission.SEND_SMS,
             Manifest.permission.ACCESS_FINE_LOCATION
         )

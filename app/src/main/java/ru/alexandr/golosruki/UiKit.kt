@@ -21,7 +21,8 @@ object UiKit {
 
     fun title(ctx: Context, text: String): TextView = TextView(ctx).apply {
         this.text = text
-        textSize = 26f
+        textSize = 28f
+        setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
         setTextColor(Color.parseColor("#1C1E22"))
         setPadding(0, 0, 0, dp(ctx, 4))
     }
@@ -36,10 +37,44 @@ object UiKit {
     fun sectionHeader(ctx: Context, text: String): TextView = TextView(ctx).apply {
         this.text = text
         textSize = 19f
+        setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
         setTextColor(Color.parseColor("#0E7C7B"))
-        val t = dp(ctx, 18)
-        setPadding(0, t, 0, dp(ctx, 6))
+        setPadding(0, dp(ctx, 16), 0, dp(ctx, 8))
     }
+
+    /** Квадратная кнопка-плитка: значок сверху, подпись снизу. */
+    fun tile(ctx: Context, icon: String, label: String, bg: Int = R.drawable.btn_primary, onClick: () -> Unit): LinearLayout =
+        LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundResource(bg)
+            setPadding(dp(ctx, 12), dp(ctx, 18), dp(ctx, 12), dp(ctx, 18))
+            isClickable = true
+            setOnClickListener { onClick() }
+            addView(TextView(ctx).apply {
+                text = icon; textSize = 30f; gravity = Gravity.CENTER
+            })
+            addView(TextView(ctx).apply {
+                text = label; textSize = 14f; setTextColor(Color.WHITE)
+                setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
+                gravity = Gravity.CENTER
+                setPadding(0, dp(ctx, 6), 0, 0)
+            })
+        }
+
+    /** Две плитки в ряд (равная ширина). */
+    fun row2(ctx: Context, a: android.view.View, b: android.view.View): LinearLayout =
+        LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(ctx, 10) }
+            layoutParams = lp
+            val g = dp(ctx, 5)
+            a.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = g }
+            b.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = g }
+            addView(a); addView(b)
+        }
 
     fun body(ctx: Context, text: String): TextView = TextView(ctx).apply {
         this.text = text

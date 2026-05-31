@@ -237,13 +237,23 @@ class VoiceAccessibilityService : AccessibilityService() {
             Mode.GRID2 -> {
                 val cell = targets[number] ?: run { showStatus("Нет ячейки $number"); return }
                 tapAt(cell.exactCenterX(), cell.exactCenterY(), kind)
-                resetOverlay()
+                afterTap(kind)
             }
             else -> {  // NUMBERS или NONE
                 val r = targets[number] ?: run { showStatus("Нет цели $number"); return }
                 tapAt(r.exactCenterX(), r.exactCenterY(), kind)
-                resetOverlay()
+                afterTap(kind)
             }
+        }
+    }
+
+    /** После обычного тапа — убрать наложение; после долгого — перенумеровать появившееся меню. */
+    private fun afterTap(kind: TapKind) {
+        if (kind == TapKind.LONG) {
+            resetOverlay()
+            handler.postDelayed({ showNumbers() }, 650)  // успеть пронумеровать контекстное меню
+        } else {
+            resetOverlay()
         }
     }
 
@@ -408,6 +418,20 @@ class VoiceAccessibilityService : AccessibilityService() {
             val f = findEditable(node.getChild(i)); if (f != null) return f
         }
         return null
+    }
+
+    /** Заменяет содержимое поля целиком (диктовка) — без подмешивания подсказки поля. */
+    fun setFieldText(text: String) {
+        val node = focusedEditable() ?: run { showStatus("Нет поля ввода"); return }
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        }
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        val sel = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, text.length)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, text.length)
+        }
+        runCatching { node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel) }
     }
 
     fun typeText(text: String) {

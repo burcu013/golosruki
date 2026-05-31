@@ -40,6 +40,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var state = State.ASLEEP
     @Volatile private var dictation = false
     @Volatile private var dictationDigits = false
+    private val dictBuffer = StringBuilder()
 
     private val idleRunnable = Runnable {
         state = State.ASLEEP
@@ -196,6 +197,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     fun enterDictation(digits: Boolean = false) {
         dictation = true
         dictationDigits = digits
+        dictBuffer.setLength(0)
         val hint = if (digits) "Диктовка цифрами: говорите номер, «готово» — выход"
         else "Диктовка: говорите текст, «готово» — выход"
         VoiceAccessibilityService.instance?.showStatus(hint)
@@ -206,6 +208,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private fun exitDictation() {
         dictation = false
         dictationDigits = false
+        dictBuffer.setLength(0)
         VoiceAccessibilityService.instance?.showStatus("Команды активны")
         restart(grammar = true)
         resetIdle(); refreshNotification()
@@ -249,8 +252,13 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 exitDictation(); return
             }
             resetIdle()
-            val out = if (dictationDigits) NumberWords.toDigits(text) else text
-            if (out.isNotBlank()) post { VoiceAccessibilityService.instance?.typeText(out) }
+            val chunk = if (dictationDigits) NumberWords.toDigits(text) else text
+            if (chunk.isNotBlank()) {
+                if (!dictationDigits && dictBuffer.isNotEmpty()) dictBuffer.append(" ")
+                dictBuffer.append(chunk)
+                val full = dictBuffer.toString()
+                post { VoiceAccessibilityService.instance?.setFieldText(full) }
+            }
             return
         }
 

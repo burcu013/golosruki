@@ -45,6 +45,11 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { startVoice() }
         })
 
+        root.addView(Button(this).apply {
+            text = "🎤 ТЕСТ микрофона (диагностика)"
+            setOnClickListener { startActivity(Intent(this@MainActivity, TestActivity::class.java)) }
+        })
+
         root.addView(TextView(this).apply {
             text = """
                 АКТИВАЦИЯ: скажите «Иван». После 30 сек тишины — снова «Иван».

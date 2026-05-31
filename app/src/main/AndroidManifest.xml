@@ -28,6 +28,11 @@
             </intent-filter>
         </activity>
 
+        <!-- Диагностика микрофона (удалить после тестов) -->
+        <activity
+            android:name=".TestActivity"
+            android:exported="false" />
+
         <!-- Активность пробуждения/разблокировки экрана -->
         <activity
             android:name=".UnlockActivity"

@@ -42,7 +42,7 @@ class VoiceAccessibilityService : AccessibilityService() {
         instance = this
         overlay = OverlayController(this)
         overlay.showStatus("Сон. Скажите: Иван")
-        Log.d(TAG, "Служба подключена")
+        Logger.log("ACC", "Служба спец. возможностей ПОДКЛЮЧЕНА")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}

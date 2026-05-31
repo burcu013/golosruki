@@ -17,7 +17,6 @@ import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
-import org.vosk.android.StorageService
 
 /**
  * Слушает микрофон офлайн (Vosk).
@@ -76,11 +75,20 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     private fun initModel() {
-        StorageService.unpack(
-            this, "model-ru", "model",
-            { m -> model = m; startListening(grammar = true) },
-            { e -> Log.e("GolosRuki", "Ошибка модели: ${e.message}") }
-        )
+        Thread {
+            try {
+                Logger.log("REC", "Установка модели…")
+                val path = ModelInstaller.ensureModel(this)
+                val m = Model(path)
+                Logger.log("REC", "Модель загружена, запуск прослушивания")
+                handler.post { model = m; startListening(grammar = true) }
+            } catch (e: Exception) {
+                Logger.log("REC", "Ошибка модели: ${e.message}")
+                handler.post {
+                    VoiceAccessibilityService.instance?.showStatus("Ошибка модели: ${e.message}")
+                }
+            }
+        }.start()
     }
 
     private fun startListening(grammar: Boolean) {
@@ -90,7 +98,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             Recognizer(model, 16000.0f)
         speechService = SpeechService(rec, 16000.0f)
         speechService?.startListening(this)
-        Log.d("GolosRuki", "Слушаю (грамматика=$grammar)")
+        Logger.log("REC", "Слушаю (грамматика=$grammar)")
     }
 
     private fun restart(grammar: Boolean) {
@@ -123,7 +131,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     override fun onResult(hypothesis: String?) {
         val text = hypothesis?.let { JSONObject(it).optString("text") } ?: return
         if (text.isBlank()) return
-        Log.d("GolosRuki", "Распознано: $text")
+        Logger.log("REC", "Распознано: '$text' (state=$state, dict=$dictation)")
 
         // Режим диктовки: всё печатаем, кроме слов выхода
         if (dictation) {
@@ -159,6 +167,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             if (!(text.contains("слушай") || text.contains("продолжи"))) return
         }
         val cmd = CommandParser.parse(text, personal)
+        Logger.log("CMD", "Команда: ${cmd.label()}")
         post { VoiceAccessibilityService.instance?.execute(cmd) }
     }
 

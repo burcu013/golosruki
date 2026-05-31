@@ -15,7 +15,6 @@ import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
-import org.vosk.android.StorageService
 
 /** Диагностика: показывает в реальном времени, что слышит микрофон.
  *  Если внизу появляется текст — микрофон и модель работают.
@@ -77,11 +76,22 @@ class TestActivity : ComponentActivity(), RecognitionListener {
 
     private fun startTest() {
         status.text = "Загрузка модели…"
-        StorageService.unpack(
-            this, "model-ru", "model",
-            { m -> model = m; status.text = "✅ Модель загружена. Говорите!"; startMic() },
-            { e -> status.text = "❌ ОШИБКА модели: ${e.message}\nВозможно модель не попала в APK." }
-        )
+        Logger.log("TEST", "Старт теста, загрузка модели")
+        Thread {
+            try {
+                val path = ModelInstaller.ensureModel(this)
+                val m = Model(path)
+                runOnUiThread {
+                    model = m
+                    status.text = "✅ Модель загружена. Говорите!"
+                    Logger.log("TEST", "Модель ОК, запуск микрофона")
+                    startMic()
+                }
+            } catch (e: Exception) {
+                Logger.log("TEST", "Ошибка модели: ${e.message}")
+                runOnUiThread { status.text = "❌ ${e.message}" }
+            }
+        }.start()
     }
 
     private fun startMic() {
@@ -112,7 +122,7 @@ class TestActivity : ComponentActivity(), RecognitionListener {
 
     override fun onResult(hypothesis: String?) {
         val t = hypothesis?.let { JSONObject(it).optString("text") } ?: return
-        if (t.isNotBlank()) heard.text = "✓ $t"
+        if (t.isNotBlank()) { heard.text = "✓ $t"; Logger.log("TEST", "Распознано: $t") }
     }
 
     override fun onFinalResult(hypothesis: String?) {}

@@ -33,6 +33,11 @@
             android:name=".TestActivity"
             android:exported="false" />
 
+        <!-- Экран логов (удалить после тестов) -->
+        <activity
+            android:name=".LogActivity"
+            android:exported="false" />
+
         <!-- Активность пробуждения/разблокировки экрана -->
         <activity
             android:name=".UnlockActivity"

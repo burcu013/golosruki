@@ -76,7 +76,7 @@ object CommandParser {
             t.contains("помощь") || t.contains("команды") -> return Command.Help
             t.contains("молчи") || t.contains("замолчи") || t.contains("замри") -> return Command.Pause
             t.contains("пауза") || t.contains("останови") || t.contains("стоп") || t.contains("хватит") -> return Command.MediaPause
-            t.contains("воспроизв") || t.contains("играй") || t.contains("плей") -> return Command.MediaPlay
+            t.contains("воспроизв") || t.contains("играй") || t.contains("плей") || t.contains("продолж") -> return Command.MediaPlay
             t.contains("слушай") || t.contains("продолжи") -> return Command.Resume
             t.contains("скрой") || t.contains("убери") || t.contains("спрячь") || t.contains("отмена") -> return Command.HideOverlay
             t.contains("номера") || t.contains("кнопки") -> return Command.ShowNumbers

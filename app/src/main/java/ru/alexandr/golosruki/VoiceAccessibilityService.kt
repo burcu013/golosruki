@@ -520,7 +520,10 @@ class VoiceAccessibilityService : AccessibilityService() {
         val number = personal.sosNumber
         if (number.isBlank()) { showStatus("SOS-номер не задан"); return }
         val loc = lastKnownLocation()
-        val mapLink = loc?.let { " Координаты: https://maps.google.com/?q=${it.latitude},${it.longitude}" } ?: ""
+        val mapLink = loc?.let {
+            // Яндекс.Карты используют порядок «долгота,широта»
+            " Координаты: https://yandex.ru/maps/?pt=${it.longitude},${it.latitude}&z=18&l=map"
+        } ?: ""
         val text = personal.sosText + mapLink
         try {
             val sms: SmsManager? = if (Build.VERSION.SDK_INT >= 31)
@@ -542,8 +545,13 @@ class VoiceAccessibilityService : AccessibilityService() {
     private fun lastKnownLocation(): Location? {
         return try {
             val lm = getSystemService(LOCATION_SERVICE) as LocationManager
-            lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            val providers = listOf(
+                LocationManager.GPS_PROVIDER,
+                LocationManager.NETWORK_PROVIDER,
+                LocationManager.PASSIVE_PROVIDER
+            )
+            providers.mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }
+                .maxByOrNull { it.time }
         } catch (e: SecurityException) { null }
     }
 

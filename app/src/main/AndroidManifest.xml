@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
@@ -73,6 +74,12 @@
         <service
             android:name=".VoiceRecognitionService"
             android:foregroundServiceType="microphone"
+            android:exported="false" />
+
+        <!-- Foreground-служба: фоновая загрузка большой модели -->
+        <service
+            android:name=".ModelDownloadService"
+            android:foregroundServiceType="dataSync"
             android:exported="false" />
 
     </application>

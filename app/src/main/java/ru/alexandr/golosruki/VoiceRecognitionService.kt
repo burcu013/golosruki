@@ -36,6 +36,20 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var keepScreen = true
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager }
 
+    /** Надёжнее, чем только isMusicActive: учитывает активные аудио-сессии (API 26+). */
+    private fun isMediaPlaying(): Boolean {
+        if (audioManager.isMusicActive) return true
+        if (Build.VERSION.SDK_INT >= 26) {
+            return try { audioManager.activePlaybackConfigurations.isNotEmpty() } catch (e: Exception) { false }
+        }
+        return false
+    }
+
+    /** Экран включён (интерактивен)? */
+    private fun isScreenOn(): Boolean = try {
+        (getSystemService(Context.POWER_SERVICE) as android.os.PowerManager).isInteractive
+    } catch (e: Exception) { true }
+
     private enum class State { ASLEEP, AWAKE }
     @Volatile private var state = State.ASLEEP
     @Volatile private var dictation = false
@@ -54,6 +68,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         const val CHANNEL_ID = "golosruki_voice"
         const val NOTIF_ID = 1
         const val ACTION_RESET = "ru.alexandr.golosruki.RESET"
+        const val ACTION_RELOAD = "ru.alexandr.golosruki.RELOAD"   // перезагрузить модель (после смены пакета)
         @Volatile var instance: VoiceRecognitionService? = null
         @Volatile private var paused = false
         fun setPaused(p: Boolean) {
@@ -65,8 +80,23 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_RESET) resetState()
+        when (intent?.action) {
+            ACTION_RESET -> resetState()
+            ACTION_RELOAD -> reloadModel()
+        }
         return START_STICKY
+    }
+
+    /** Перезагрузка модели (например, после скачивания большой). */
+    fun reloadModel() {
+        Logger.log("REC", "Перезагрузка модели")
+        runCatching { speechService?.stop() }
+        runCatching { speechService?.shutdown() }
+        speechService = null
+        runCatching { model?.close() }
+        model = null
+        initModel()
+        VoiceAccessibilityService.instance?.showStatus("Модель переключена")
     }
 
     /** Полный сброс: снять паузу/диктовку, разбудить, перезапустить распознавание. */
@@ -230,21 +260,37 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     override fun onResult(hypothesis: String?) {
         val raw = hypothesis?.let { JSONObject(it).optString("text") } ?: return
-        val text = raw.replace("[unk]", " ").trim()
+        val text = normalize(raw.replace("[unk]", " "))
         if (text.isBlank()) return
 
-        // Во время видео/музыки: работает только «слово активации + команда потока»
-        if (ignoreMedia && audioManager.isMusicActive()) {
+        // ЭКРАН ВЫКЛЮЧЕН/ЗАБЛОКИРОВАН: реагируем ТОЛЬКО на «<слово активации> привет» —
+        // эта фраза зажигает экран и снимает блокировку. Остальные команды игнорируются.
+        if (!isScreenOn()) {
+            if (text.contains(wakeWord) && text.contains("привет")) {
+                state = State.AWAKE
+                if (paused) setPaused(false)
+                resetIdle()
+                Logger.log("REC", "Экран выкл → пробуждение по «$wakeWord привет»")
+                if (keepScreen) VoiceAccessibilityService.instance?.keepScreenOn(true)
+                post { VoiceAccessibilityService.instance?.execute(Command.Unlock) }
+            } else {
+                Logger.log("REC", "Игнор (экран выключен): '$text'")
+            }
+            return
+        }
+
+        // Во время видео/музыки: реагируем ТОЛЬКО на «слово активации + команда» (любую),
+        // чтобы звук из видео не вызывал ложных срабатываний, но при этом было полное управление.
+        if (ignoreMedia && isMediaPlaying()) {
             if (text.contains(wakeWord)) {
                 val rest = stripWake(text)
-                val c = CommandParser.parseMedia(rest)
-                if (c != null) {
-                    Logger.log("MEDIA", "Команда при медиа: ${c.label()}")
-                    post { VoiceAccessibilityService.instance?.execute(c) }
+                Logger.log("MEDIA", "Активация при медиа, команда: '$rest'")
+                if (paused) setPaused(false)
+                resetIdle()
+                if (rest.isBlank()) {
+                    VoiceAccessibilityService.instance?.showStatus("${cap(wakeWord)} слушает (видео)")
                 } else {
-                    VoiceAccessibilityService.instance?.showStatus(
-                        "При медиа: ${cap(wakeWord)} + пауза/играй/громче/тише/назад"
-                    )
+                    handleCommand(rest)   // полный набор: пауза/играй, номера, тап, сетка, листание шортсов
                 }
             } else {
                 Logger.log("REC", "Игнор (играет медиа): '$text'")
@@ -297,6 +343,14 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     private var lastCmdText: String? = null
+
+    /** Приводит распознанный текст к чистому виду: нижний регистр, без лишних пробелов и дублей слов подряд. */
+    private fun normalize(s: String): String {
+        val tokens = s.lowercase().trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        val out = ArrayList<String>(tokens.size)
+        for (w in tokens) if (out.isEmpty() || out.last() != w) out.add(w)  // «позвони позвони» -> «позвони»
+        return out.joinToString(" ")
+    }
 
     private fun handleCommand(text: String) {
         if (text.contains("повтори")) {

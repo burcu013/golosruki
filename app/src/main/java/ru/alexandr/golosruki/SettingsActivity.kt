@@ -138,16 +138,25 @@ class SettingsActivity : ComponentActivity() {
         // --- Точность распознавания (большая модель) ---
         val mc = UiKit.card(this)
         mc.addView(UiKit.sectionHeader(this, "Точность распознавания"))
-        mc.addView(UiKit.body(this, "Большая модель (≈1.8 ГБ) распознаёт имена и редкие слова заметно лучше. Нужен интернет для разовой загрузки, ~4 ГБ свободного места и больше оперативной памяти. Малая работает всегда."))
+        mc.addView(UiKit.body(this, "Большая модель (≈1.8 ГБ) распознаёт имена и редкие слова заметно лучше. Загрузка идёт В ФОНЕ со статусом в шторке: при обрыве связи докачивается автоматически с места обрыва, можно «Отменить». Нужен интернет, ~4 ГБ места и больше оперативной памяти. После загрузки включается сама."))
         bigModelCheck = android.widget.CheckBox(this).apply {
             text = "Использовать большую модель"; textSize = 15f
             isChecked = SettingsStore.getBigModel(this@SettingsActivity)
             isEnabled = ModelDownloader.isReady(this@SettingsActivity)
         }
         mc.addView(bigModelCheck)
-        modelStatus = UiKit.body(this, if (ModelDownloader.isReady(this)) "Статус: большая модель загружена ✅" else "Статус: большая модель не загружена")
+        modelStatus = UiKit.body(this, modelStatusText())
         mc.addView(modelStatus)
-        mc.addView(UiKit.button(this, "⬇️ Скачать большую модель (1.8 ГБ)") { startBigDownload() })
+        mc.addView(UiKit.button(this, "⬇️ Скачать большую модель (1.8 ГБ)") {
+            val i = Intent(this, ModelDownloadService::class.java).setAction(ModelDownloadService.ACTION_START)
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+            modelStatus.text = "Загрузка идёт в фоне — статус в шторке уведомлений. Можно свернуть приложение."
+            Toast.makeText(this, "Загрузка началась (в фоне)", Toast.LENGTH_SHORT).show()
+        })
+        mc.addView(UiKit.button(this, "✖️ Отменить загрузку", R.drawable.btn_danger) {
+            startService(Intent(this, ModelDownloadService::class.java).setAction(ModelDownloadService.ACTION_CANCEL))
+            modelStatus.text = "Загрузка отменена. Частично скачанное сохранено — повторная загрузка продолжит с места обрыва."
+        })
         mc.addView(UiKit.button(this, "🗑 Удалить большую модель", R.drawable.btn_danger) {
             ModelDownloader.delete(this)
             SettingsStore.setBigModel(this, false)
@@ -161,19 +170,19 @@ class SettingsActivity : ComponentActivity() {
         setContentView(ScrollView(this).apply { addView(col) })
     }
 
-    private fun startBigDownload() {
-        if (ModelDownloader.running) { Toast.makeText(this, "Загрузка уже идёт", Toast.LENGTH_SHORT).show(); return }
-        modelStatus.text = "Скачивание… 0% (не закрывайте экран)"
-        ModelDownloader.download(this,
-            onProgress = { pct ->
-                modelStatus.text = if (pct < 82) "Скачивание… $pct%" else if (pct < 100) "Распаковка…" else "Почти готово…"
-            },
-            onDone = {
-                modelStatus.text = "Готово ✅ Включите галочку и нажмите «Сохранить»"
-                bigModelCheck.isEnabled = true; bigModelCheck.isChecked = true
-            },
-            onError = { msg -> modelStatus.text = "Ошибка загрузки: $msg" }
-        )
+    private fun modelStatusText(): String = when {
+        ModelDownloader.running -> "Идёт фоновая загрузка — статус в шторке уведомлений"
+        ModelDownloader.isReady(this) -> "Статус: большая модель загружена ✅"
+        else -> "Статус: большая модель не загружена"
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::modelStatus.isInitialized) {
+            modelStatus.text = modelStatusText()
+            bigModelCheck.isEnabled = ModelDownloader.isReady(this)
+            bigModelCheck.isChecked = SettingsStore.getBigModel(this) && ModelDownloader.isReady(this)
+        }
     }
 
     private fun field(type: Int): EditText = EditText(this).apply {

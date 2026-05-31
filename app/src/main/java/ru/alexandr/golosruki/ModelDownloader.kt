@@ -1,20 +1,27 @@
 package ru.alexandr.golosruki
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.ZipInputStream
 
-/** Скачивание и распаковка большой русской модели Vosk (опционально, по желанию пользователя). */
+/**
+ * Скачивание и распаковка большой русской модели Vosk.
+ * Поддерживает докачку (HTTP Range) и отмену. Вызывается из ModelDownloadService.
+ */
 object ModelDownloader {
     const val URL_BIG = "https://alphacephei.com/vosk/models/vosk-model-ru-0.42.zip"
     private const val DIR = "model-ru-big"
-    private val ui = Handler(Looper.getMainLooper())
-    @Volatile var running = false; private set
+    private const val ZIP = "model-big.zip"
+
+    @Volatile var running = false
+    @Volatile var cancelRequested = false
+    @Volatile var lastError: String? = null
+    @Volatile var progressPct = 0
+    @Volatile var phase = ""
 
     fun isReady(ctx: Context): Boolean = resolveModelDir(ctx) != null
 
@@ -31,58 +38,74 @@ object ModelDownloader {
 
     fun delete(ctx: Context) {
         File(ctx.filesDir, DIR).deleteRecursively()
-        File(ctx.filesDir, "model-big.zip").delete()
+        File(ctx.filesDir, ZIP).delete()
     }
 
-    /** onProgress: 0..100. Колбэки приходят в главном потоке. */
-    fun download(ctx: Context, onProgress: (Int) -> Unit, onDone: () -> Unit, onError: (String) -> Unit) {
-        if (running) return
-        running = true
-        Thread {
-            try {
-                val zip = File(ctx.filesDir, "model-big.zip")
-                val outDir = File(ctx.filesDir, DIR)
-                outDir.deleteRecursively(); outDir.mkdirs()
-
-                val conn = (URL(URL_BIG).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 30000; readTimeout = 30000; instanceFollowRedirects = true
-                }
-                conn.connect()
-                if (conn.responseCode !in 200..299) throw Exception("HTTP ${conn.responseCode}")
-                val total = conn.contentLengthLong
+    /**
+     * Одна попытка: докачать архив (с места обрыва), распаковать. Синхронно (фоновый поток).
+     * onUpdate вызывается при изменении прогресса. true — успех, false — отмена или ошибка (см. lastError).
+     */
+    fun runOnce(ctx: Context, onUpdate: () -> Unit): Boolean {
+        val zip = File(ctx.filesDir, ZIP)
+        val outDir = File(ctx.filesDir, DIR)
+        // --- 1) Скачивание с докачкой ---
+        try {
+            var existing = if (zip.exists()) zip.length() else 0L
+            val conn = (URL(URL_BIG).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 30000; readTimeout = 30000; instanceFollowRedirects = true
+                if (existing > 0) setRequestProperty("Range", "bytes=$existing-")
+            }
+            conn.connect()
+            val code = conn.responseCode
+            val append: Boolean
+            val total: Long
+            when {
+                code == 206 -> { append = true; total = existing + conn.contentLengthLong }
+                code in 200..299 -> { append = false; existing = 0L; total = conn.contentLengthLong }
+                else -> throw IOException("HTTP $code")
+            }
+            phase = "Скачивание"; progressPct = if (total > 0) (existing * 80 / total).toInt() else 0; onUpdate()
+            FileOutputStream(zip, append).use { out ->
                 conn.inputStream.use { input ->
-                    FileOutputStream(zip).use { out ->
-                        val buf = ByteArray(64 * 1024)
-                        var read: Int; var sum = 0L; var lastPct = -1
-                        while (input.read(buf).also { read = it } > 0) {
-                            out.write(buf, 0, read); sum += read
-                            if (total > 0) {
-                                val pct = (sum * 80 / total).toInt()   // 0..80% — скачивание
-                                if (pct != lastPct) { lastPct = pct; ui.post { onProgress(pct) } }
-                            }
+                    val buf = ByteArray(64 * 1024); var read: Int; var sum = existing; var lastP = -1
+                    while (input.read(buf).also { read = it } > 0) {
+                        if (cancelRequested) return false
+                        out.write(buf, 0, read); sum += read
+                        if (total > 0) {
+                            val p = (sum * 80 / total).toInt()
+                            if (p != lastP) { lastP = p; progressPct = p; onUpdate() }
                         }
                     }
                 }
-                ui.post { onProgress(82) }                              // распаковка
-                ZipInputStream(zip.inputStream().buffered()).use { zis ->
-                    var entry = zis.nextEntry
-                    while (entry != null) {
-                        val f = File(outDir, entry.name)
-                        if (entry.isDirectory) f.mkdirs()
-                        else { f.parentFile?.mkdirs(); FileOutputStream(f).use { zis.copyTo(it) } }
-                        zis.closeEntry(); entry = zis.nextEntry
-                    }
-                }
-                zip.delete()
-                if (resolveModelDir(ctx) == null) throw Exception("в архиве не найдена модель")
-                ui.post { onProgress(100) }
-                running = false
-                ui.post { onDone() }
-            } catch (e: Exception) {
-                running = false
-                File(ctx.filesDir, "model-big.zip").delete()
-                ui.post { onError(e.message ?: "ошибка") }
             }
-        }.start()
+        } catch (e: Exception) {
+            lastError = e.message ?: "сбой сети"
+            return false   // частичный архив остаётся — докачаем при следующей попытке
+        }
+        if (cancelRequested) return false
+        // --- 2) Распаковка ---
+        try {
+            phase = "Распаковка"; progressPct = 82; onUpdate()
+            outDir.deleteRecursively(); outDir.mkdirs()
+            ZipInputStream(zip.inputStream().buffered()).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    if (cancelRequested) return false
+                    val f = File(outDir, entry.name)
+                    if (entry.isDirectory) f.mkdirs()
+                    else { f.parentFile?.mkdirs(); FileOutputStream(f).use { zis.copyTo(it) } }
+                    zis.closeEntry(); entry = zis.nextEntry
+                }
+            }
+            if (resolveModelDir(ctx) == null) throw IOException("в архиве не найдена модель")
+            zip.delete()
+            phase = "Готово"; progressPct = 100; onUpdate()
+            return true
+        } catch (e: Exception) {
+            lastError = e.message ?: "ошибка распаковки"
+            zip.delete()           // архив битый — скачаем заново
+            outDir.deleteRecursively()
+            return false
+        }
     }
 }

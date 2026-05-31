@@ -28,7 +28,10 @@ sealed class Command {
     data class DoubleTap(val number: Int) : Command()
     data class TypeText(val text: String) : Command()
     object DeleteText : Command()
+    object SelectAll : Command()              // выделить всё в поле
+    object ClearText : Command()              // очистить поле
     object EnterKey : Command()
+    data class SwipeItem(val number: Int, val direction: Direction) : Command()  // свайп элемента по номеру
     object Dictation : Command()              // режим диктовки (свободный текст)
     data class CallContact(val name: String, val number: String) : Command()
     data class OpenApp(val name: String, val pkg: String) : Command()
@@ -62,7 +65,10 @@ sealed class Command {
         is DoubleTap -> "Двойное нажатие $number"
         is TypeText -> "Ввод: $text"
         DeleteText -> "Удаление"
+        SelectAll -> "Выделить всё"
+        ClearText -> "Очистка поля"
         EnterKey -> "Ввод (Enter)"
+        is SwipeItem -> "Свайп $number ${direction.name.lowercase()}"
         Dictation -> "Диктовка"
         is CallContact -> "Звоню: $name"
         is OpenApp -> "Открываю: $name"

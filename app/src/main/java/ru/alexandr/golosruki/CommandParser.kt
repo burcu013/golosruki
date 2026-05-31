@@ -44,6 +44,11 @@ object CommandParser {
                 if (num.isNotBlank() && t.contains(name)) return Command.CallContact(name, num)
             }
         }
+        // 0.35 Кастомные команды запуска (своя фраза -> приложение)
+        for ((phrase, pkg) in personal.customApps) {
+            if (pkg.isNotBlank() && phrase.isNotBlank() && t.contains(phrase))
+                return Command.OpenApp(phrase, pkg)
+        }
         // 0.4 Персональные: открыть приложение
         if (t.contains("открой") || t.contains("запусти")) {
             for ((name, pkg) in personal.apps) {
@@ -67,7 +72,16 @@ object CommandParser {
             t.contains("номера") || t.contains("кнопки") -> return Command.ShowNumbers
             t.contains("сетк") -> return Command.Grid
             t.contains("ввод") || t.contains("отправ") || t.contains("энтер") -> return Command.EnterKey
-            t.contains("удали") || t.contains("стереть") -> return Command.DeleteText
+            t.contains("выдел") -> return Command.SelectAll
+            t.contains("очист") -> return Command.ClearText
+            (t.contains("удали") || t.contains("стер") || t.contains("сотри")) && t.contains("всё") -> return Command.ClearText
+            t.contains("удали") || t.contains("стереть") || t.contains("сотри") -> return Command.DeleteText
+        }
+
+        // свайп конкретного элемента по номеру: «смахни 3 влево»
+        if (t.contains("смахни") || t.contains("свайпни") || t.contains("смахн")) {
+            val numI = extractNumber(t)
+            if (numI != null) return Command.SwipeItem(numI, dirOf(t) ?: Direction.LEFT)
         }
 
         // 2. Свайпы
@@ -91,6 +105,14 @@ object CommandParser {
         // 4. (Ввод текста выполняется в режиме диктовки — см. п.0.2)
 
         return Command.Unknown
+    }
+
+    private fun dirOf(t: String): Direction? = when {
+        t.contains("вверх") -> Direction.UP
+        t.contains("вниз") -> Direction.DOWN
+        t.contains("влево") -> Direction.LEFT
+        t.contains("вправо") -> Direction.RIGHT
+        else -> null
     }
 
     private fun extractNumber(t: String): Int? {

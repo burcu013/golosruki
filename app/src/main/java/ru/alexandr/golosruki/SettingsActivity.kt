@@ -19,6 +19,9 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var sosTxt: EditText
     private val nameFields = mutableListOf<EditText>()
     private val numberFields = mutableListOf<EditText>()
+    private val openPhraseFields = mutableListOf<EditText>()
+    private val openButtons = mutableListOf<android.widget.Button>()
+    private val openPkgs = mutableListOf<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,6 +69,25 @@ class SettingsActivity : ComponentActivity() {
         }
         col.addView(c)
 
+        // Кастомные команды запуска приложений
+        val oc = UiKit.card(this)
+        oc.addView(UiKit.sectionHeader(this, "Свои команды запуска"))
+        oc.addView(UiKit.body(this, "Задайте слово-команду и выберите приложение. Скажете слово — приложение откроется."))
+        val savedOpen = SettingsStore.getOpenCommands(this).toList()
+        for (i in 0 until 4) {
+            val phrase = field(InputType.TYPE_CLASS_TEXT)
+            val savedPkg = if (i < savedOpen.size) savedOpen[i].second else ""
+            if (i < savedOpen.size) phrase.setText(savedOpen[i].first)
+            openPkgs.add(savedPkg)
+            val idx = i
+            val btn = UiKit.button(this, appLabel(savedPkg)) { pickApp(idx) }
+            openPhraseFields.add(phrase)
+            openButtons.add(btn)
+            oc.addView(phrase)
+            oc.addView(btn)
+        }
+        col.addView(oc)
+
         col.addView(UiKit.button(this, "💾 Сохранить и перезапустить", R.drawable.btn_amber) { save() })
 
         setContentView(ScrollView(this).apply { addView(col) })
@@ -81,6 +103,32 @@ class SettingsActivity : ComponentActivity() {
         setPadding(p, p, p, p)
     }
 
+    private fun appLabel(pkg: String): String {
+        if (pkg.isBlank()) return "Выбрать приложение"
+        return try {
+            val ai = packageManager.getApplicationInfo(pkg, 0)
+            "Приложение: " + packageManager.getApplicationLabel(ai)
+        } catch (e: Exception) { "Приложение: $pkg" }
+    }
+
+    private fun pickApp(rowIndex: Int) {
+        val pm = packageManager
+        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            .addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+        val items = pm.queryIntentActivities(intent, 0)
+            .map { it.loadLabel(pm).toString() to it.activityInfo.packageName }
+            .distinctBy { it.second }
+            .sortedBy { it.first.lowercase() }
+        val labels = items.map { it.first }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Выберите приложение")
+            .setItems(labels) { _, which ->
+                openPkgs[rowIndex] = items[which].second
+                openButtons[rowIndex].text = "Приложение: " + items[which].first
+            }
+            .show()
+    }
+
     private fun save() {
         SettingsStore.setWake(this, wake.text.toString().ifBlank { "иван" })
         SettingsStore.setIdle(this, idle.text.toString().toIntOrNull()?.coerceIn(10, 300) ?: 30)
@@ -94,6 +142,14 @@ class SettingsActivity : ComponentActivity() {
             if (n.isNotBlank() && num.isNotBlank()) contacts[n.lowercase()] = num
         }
         SettingsStore.setContacts(this, contacts)
+
+        val openCmds = mutableMapOf<String, String>()
+        for (i in openPhraseFields.indices) {
+            val phrase = openPhraseFields[i].text.toString().trim()
+            val pkg = openPkgs.getOrNull(i) ?: ""
+            if (phrase.isNotBlank() && pkg.isNotBlank()) openCmds[phrase.lowercase()] = pkg
+        }
+        SettingsStore.setOpenCommands(this, openCmds)
 
         val intent = Intent(this, VoiceRecognitionService::class.java)
         stopService(intent)

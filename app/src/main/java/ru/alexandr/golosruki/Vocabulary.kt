@@ -12,7 +12,8 @@ object Vocabulary {
         "быстрые", "настройки", "заблокируй", "блокировка", "скриншот",
         "номера", "кнопки", "сетка", "ячейка",
         "нажми", "нажать", "выбери", "долгое", "двойное", "нажатие", "удержание",
-        "удали", "стереть", "ввод", "отправь", "энтер",
+        "удали", "стереть", "сотри", "выдели", "выделить", "очисти", "очистить", "всё",
+        "смахни", "свайпни", "ввод", "отправь", "энтер",
         "скрой", "убери", "спрячь", "отмена",
         "стоп", "хватит", "пауза", "слушай", "продолжи",
         "помощь", "команды",
@@ -40,6 +41,7 @@ object Vocabulary {
         wakeWord.split(" ").forEach { if (it.isNotBlank()) words.add(it) }
         personal.contacts.keys.forEach { name -> name.split(" ").forEach { words.add(it) } }
         personal.apps.keys.forEach { name -> name.split(" ").forEach { words.add(it) } }
+        personal.customApps.keys.forEach { phrase -> phrase.split(" ").forEach { words.add(it) } }
         val json = words.joinToString(",") { "\"$it\"" }
         // [unk] позволяет модели выдавать «неизвестно» вместо подбора ближайшего слова к шуму
         return "[$json,\"[unk]\"]"

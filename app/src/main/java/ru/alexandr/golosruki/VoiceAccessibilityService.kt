@@ -58,6 +58,10 @@ class VoiceAccessibilityService : AccessibilityService() {
         if (this::overlay.isInitialized) overlay.showStatus(text)
     }
 
+    fun keepScreenOn(on: Boolean) {
+        if (this::overlay.isInitialized) overlay.setKeepScreenOn(on)
+    }
+
     fun execute(command: Command) {
         showStatus(command.label())
         when (command) {
@@ -85,7 +89,10 @@ class VoiceAccessibilityService : AccessibilityService() {
             is Command.DoubleTap -> onTap(command.number, TapKind.DOUBLE)
             is Command.TypeText -> typeText(command.text)
             Command.DeleteText -> deleteText()
+            Command.SelectAll -> selectAll()
+            Command.ClearText -> clearText()
             Command.EnterKey -> pressEnter()
+            is Command.SwipeItem -> swipeItem(command.number, command.direction)
             Command.Dictation -> VoiceRecognitionService.instance?.enterDictation()
             is Command.CallContact -> doCall(command.number)
             is Command.OpenApp -> openApp(command.pkg)
@@ -97,8 +104,16 @@ class VoiceAccessibilityService : AccessibilityService() {
     }
 
     private fun screenSize(): Pair<Int, Int> {
-        val dm = resources.displayMetrics
-        return dm.widthPixels to dm.heightPixels
+        val wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
+        return if (Build.VERSION.SDK_INT >= 30) {
+            val b = wm.currentWindowMetrics.bounds
+            b.width() to b.height()
+        } else {
+            val dm = android.util.DisplayMetrics()
+            @Suppress("DEPRECATION")
+            wm.defaultDisplay.getRealMetrics(dm)
+            dm.widthPixels to dm.heightPixels
+        }
     }
 
     // --- Скролл: сначала пробуем прокрутить нужный контейнер, иначе жест по центру ---
@@ -275,6 +290,54 @@ class VoiceAccessibilityService : AccessibilityService() {
         return result
     }
 
+    // --- Свайп/закрытие конкретного элемента по номеру (например, уведомления) ---
+    private fun swipeItem(number: Int, direction: Direction) {
+        val r = targets[number] ?: run { showStatus("Нет цели $number"); return }
+        // Для горизонтального свайва пробуем штатно закрыть (уведомление и т.п.)
+        if (direction == Direction.LEFT || direction == Direction.RIGHT) {
+            val d = findDismissable(r.centerX(), r.centerY())
+            if (d != null && d.performAction(AccessibilityNodeInfo.ACTION_DISMISS)) {
+                Logger.log("ACC", "Элемент закрыт (dismiss)")
+                resetOverlay(); return
+            }
+        }
+        swipeAcross(r, direction)
+        resetOverlay()
+    }
+
+    private fun swipeAcross(rect: Rect, direction: Direction) {
+        val (w, h) = screenSize()
+        val cx = rect.exactCenterX(); val cy = rect.exactCenterY()
+        val path = Path()
+        when (direction) {
+            Direction.LEFT  -> { path.moveTo(rect.right - 12f, cy); path.lineTo(8f, cy) }
+            Direction.RIGHT -> { path.moveTo(rect.left + 12f, cy); path.lineTo(w - 8f, cy) }
+            Direction.UP    -> { path.moveTo(cx, rect.bottom - 12f); path.lineTo(cx, maxOf(8f, cy - h * 0.3f)) }
+            Direction.DOWN  -> { path.moveTo(cx, rect.top + 12f); path.lineTo(cx, minOf(h - 8f, cy + h * 0.3f)) }
+        }
+        gesture(path, 280)
+    }
+
+    /** Узел под точкой, поддерживающий «закрыть» (ACTION_DISMISS) — для уведомлений. */
+    private fun findDismissable(x: Int, y: Int): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        var result: AccessibilityNodeInfo? = null
+        var smallest = Long.MAX_VALUE
+        fun walk(n: AccessibilityNodeInfo?) {
+            if (n == null) return
+            if (n.isVisibleToUser) {
+                val r = Rect(); n.getBoundsInScreen(r)
+                if (r.contains(x, y) && n.actionList.any { it.id == AccessibilityNodeInfo.ACTION_DISMISS }) {
+                    val area = r.width().toLong() * r.height()
+                    if (area < smallest) { smallest = area; result = n }
+                }
+            }
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(root)
+        return result
+    }
+
     private fun doTap(x: Float, y: Float, kind: TapKind) {
         val p = Path().apply { moveTo(x, y); lineTo(x, y) }
         when (kind) {
@@ -325,9 +388,31 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     private fun deleteText() {
         val node = focusedEditable() ?: return
-        val existing = node.text?.toString() ?: ""
+        val full = node.text?.toString() ?: ""
+        val s = node.textSelectionStart; val e = node.textSelectionEnd
+        val newText = if (s in 0..full.length && e in 0..full.length && s != e) {
+            full.removeRange(minOf(s, e), maxOf(s, e))   // удалить выделенное
+        } else full.dropLast(1)                           // иначе один символ
         val args = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, existing.dropLast(1))
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
+        }
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    private fun selectAll() {
+        val node = focusedEditable() ?: run { showStatus("Нет поля ввода"); return }
+        val len = node.text?.length ?: 0
+        val args = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, len)
+        }
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+    }
+
+    private fun clearText() {
+        val node = focusedEditable() ?: run { showStatus("Нет поля ввода"); return }
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
         }
         node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }

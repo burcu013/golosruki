@@ -26,7 +26,8 @@ class OverlayController(private val context: Context) {
             type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         )
         params.gravity = Gravity.TOP or Gravity.START
@@ -45,5 +46,17 @@ class OverlayController(private val context: Context) {
         showStatus("Иван · назад · домой · номера · нажми N · сетка · позвони X · открой X · сос · диктовка")
     }
     fun clearTargets() { view?.clearTargets() }
+
+    /** Держать экран включённым через флаг окна наложения. */
+    fun setKeepScreenOn(on: Boolean) {
+        val v = view ?: return
+        val lp = v.layoutParams as? WindowManager.LayoutParams ?: return
+        lp.flags = if (on)
+            lp.flags or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        else
+            lp.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON.inv()
+        runCatching { wm.updateViewLayout(v, lp) }
+    }
+
     fun clearAll() { view?.let { runCatching { wm.removeView(it) } }; view = null }
 }

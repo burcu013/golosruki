@@ -6,9 +6,10 @@ import org.json.JSONObject
 /** Персональные команды из assets/personal_commands.json. */
 data class PersonalConfig(
     val contacts: Map<String, String>,   // имя(дат. падеж) -> номер
-    val apps: Map<String, String>,        // название -> package
+    val apps: Map<String, String>,        // название -> package («открой X»)
     val sosNumber: String,
-    val sosText: String
+    val sosText: String,
+    val customApps: Map<String, String> = emptyMap()  // своя фраза -> package
 ) {
     companion object {
         fun load(context: Context): PersonalConfig {
@@ -18,7 +19,8 @@ data class PersonalConfig(
             val contacts = if (savedContacts.isNotEmpty()) savedContacts else asset.contacts
             val sosNum = SettingsStore.getSosNumber(context).ifBlank { asset.sosNumber }
             val sosTxt = SettingsStore.getSosText(context).ifBlank { asset.sosText }
-            return PersonalConfig(contacts, asset.apps, sosNum, sosTxt)
+            val customApps = SettingsStore.getOpenCommands(context)
+            return PersonalConfig(contacts, asset.apps, sosNum, sosTxt, customApps)
         }
 
         private fun loadAsset(context: Context): PersonalConfig {

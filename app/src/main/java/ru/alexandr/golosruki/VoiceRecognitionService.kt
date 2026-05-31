@@ -39,6 +39,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private val idleRunnable = Runnable {
         state = State.ASLEEP
         VoiceAccessibilityService.instance?.showStatus("Сон. Скажите: ${cap(wakeWord)}")
+        VoiceAccessibilityService.instance?.keepScreenOn(false)
         refreshNotification()
     }
 
@@ -69,6 +70,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         state = State.AWAKE
         if (model != null) restart(grammar = true)
         resetIdle()
+        VoiceAccessibilityService.instance?.keepScreenOn(true)
         refreshNotification()
         VoiceAccessibilityService.instance?.showStatus("${cap(wakeWord)} перезапущен")
     }
@@ -213,6 +215,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             state = State.AWAKE
             if (paused) { setPaused(false); Logger.log("REC", "Пауза снята") }
             resetIdle()
+            VoiceAccessibilityService.instance?.keepScreenOn(true)
             val rest = if (isWake) stripWake(text) else stripResume(text)
             refreshNotification()
             if (rest.isBlank()) {

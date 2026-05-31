@@ -37,4 +37,22 @@ object SettingsStore {
         for ((k, v) in contacts) if (k.isNotBlank() && v.isNotBlank()) obj.put(k.lowercase().trim(), v.trim())
         p(ctx).edit().putString("contacts", obj.toString()).apply()
     }
+
+    /** Кастомные команды запуска: фраза -> package. */
+    fun getOpenCommands(ctx: Context): Map<String, String> {
+        val raw = p(ctx).getString("open_cmds", null) ?: return emptyMap()
+        return try {
+            val obj = JSONObject(raw)
+            val m = mutableMapOf<String, String>()
+            val it = obj.keys()
+            while (it.hasNext()) { val k = it.next(); m[k.lowercase()] = obj.optString(k) }
+            m
+        } catch (e: Exception) { emptyMap() }
+    }
+
+    fun setOpenCommands(ctx: Context, cmds: Map<String, String>) {
+        val obj = JSONObject()
+        for ((k, v) in cmds) if (k.isNotBlank() && v.isNotBlank()) obj.put(k.lowercase().trim(), v.trim())
+        p(ctx).edit().putString("open_cmds", obj.toString()).apply()
+    }
 }

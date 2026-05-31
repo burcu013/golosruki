@@ -50,7 +50,9 @@ object CommandParser {
         }
         // 0.35 Кастомные команды запуска (своя фраза -> приложение)
         for ((phrase, pkg) in personal.customApps) {
-            if (pkg.isNotBlank() && phrase.isNotBlank() && t.contains(phrase))
+            if (pkg.isBlank() || phrase.isBlank()) continue
+            if (t.contains(phrase)) return Command.OpenApp(phrase, pkg)
+            if (phrase.length >= 4 && t.split(" ").any { it.length >= 4 && levenshtein(it, phrase) <= 2 })
                 return Command.OpenApp(phrase, pkg)
         }
         // 0.4 Персональные: открыть приложение
@@ -153,16 +155,36 @@ object CommandParser {
         }
     }
 
-    /** Совпадение контакта с учётом склонений (по основе слова). */
+    /** Совпадение контакта с учётом склонений (основа слова) и опечаток распознавания. */
     private fun matchContact(t: String, contacts: Map<String, String>): Pair<String, String>? {
-        val words = t.split(" ").filter { it.isNotBlank() }
+        val words = t.split(" ").filter { it.isNotBlank() && it != "позвони" && it != "набери" && it != "звонок" }
         for ((name, num) in contacts) {
             if (num.isBlank()) continue
             if (t.contains(name)) return name to num
             val stem = name.take(maxOf(3, name.length - 2))
-            if (stem.length >= 3 && words.any { it.startsWith(stem) }) return name to num
+            if (stem.length >= 3 && words.any { it.startsWith(stem) || name.startsWith(it.take(maxOf(3, it.length - 1))) })
+                return name to num
+            // нечётко: близкое по написанию слово (ошибка распознавания)
+            if (name.length >= 4 && words.any { it.length >= 4 && levenshtein(it, name) <= 2 })
+                return name to num
         }
         return null
+    }
+
+    private fun levenshtein(a: String, b: String): Int {
+        val dp = IntArray(b.length + 1) { it }
+        for (i in 1..a.length) {
+            var prev = dp[0]; dp[0] = i
+            for (j in 1..b.length) {
+                val tmp = dp[j]
+                dp[j] = minOf(
+                    dp[j] + 1, dp[j - 1] + 1,
+                    prev + if (a[i - 1] == b[j - 1]) 0 else 1
+                )
+                prev = tmp
+            }
+        }
+        return dp[b.length]
     }
 
     private fun dirOf(t: String): Direction? = when {

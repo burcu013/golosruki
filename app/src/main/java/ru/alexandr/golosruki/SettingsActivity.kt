@@ -92,14 +92,14 @@ class SettingsActivity : ComponentActivity() {
             it.setText(if (t.isBlank()) "SOS! Нужна срочная помощь." else t)
         }
         s.addView(sosTxt)
-        s.addView(UiKit.body(this, "Код-подтверждение (слово или число). Если задан — SOS только по «сос + код», напр. «сос крапива» или «сос 911». Пусто — без защиты:"))
+        s.addView(UiKit.body(this, "Код-подтверждение. Если задан — SOS только по «сос + код», напр. «сос 911». ЛУЧШЕ ЧИСЛО (911, 123) — распознаётся точнее редкого слова. Пусто — без защиты:"))
         sosPin = field(InputType.TYPE_CLASS_TEXT).also { it.setText(SettingsStore.getSosPin(this)) }
         s.addView(sosPin)
         col.addView(s)
 
         val c = UiKit.card(this)
         c.addView(UiKit.sectionHeader(this, "Быстрые контакты"))
-        c.addView(UiKit.body(this, "Имя в дательном падеже («позвони КОМУ») и номер. Пустые строки игнорируются."))
+        c.addView(UiKit.body(this, "Имя в дательном падеже («позвони КОМУ») и номер. Используйте ПРОСТЫЕ слова/имена (жене, маме, сыну, врачу) — редкие/выдуманные имена распознаются плохо."))
         val saved = SettingsStore.getContacts(this).toList()
         for (i in 0 until 6) {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }

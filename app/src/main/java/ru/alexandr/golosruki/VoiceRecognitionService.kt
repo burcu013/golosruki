@@ -92,6 +92,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         vibrateOnWake = SettingsStore.getVibrate(this)
         keepScreen = SettingsStore.getKeepScreen(this)
         Logger.log("REC", "Старт службы. Слово активации: '$wakeWord', сон: ${idleMs / 1000}с")
+        Logger.log("CFG", "Контактов: ${personal.contacts.size} ${personal.contacts.keys}; " +
+            "своих команд: ${personal.customApps.size}; " +
+            "SOS-код: ${if (personal.sosPin.isBlank()) "нет" else "'" + personal.sosPin + "'"}; " +
+            "SOS-номер: ${if (personal.sosNumber.isBlank()) "НЕ ЗАДАН" else "есть"}")
 
         val notif = buildNotification("Запуск…")
         if (Build.VERSION.SDK_INT >= 29)
@@ -301,6 +305,16 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         lastCmdText = text
         val cmd = CommandParser.parse(text, personal)
         Logger.log("CMD", "Команда: ${cmd.label()}")
+        if (cmd is Command.Unknown) {
+            when {
+                text.contains("позвони") || text.contains("набери") -> {
+                    val names = personal.contacts.keys.joinToString(", ").ifBlank { "нет в настройках" }
+                    VoiceAccessibilityService.instance?.showStatus("Скажите имя контакта: $names")
+                }
+                (text.contains("сос") || text.contains("спасите")) && personal.sosPin.isNotBlank() ->
+                    VoiceAccessibilityService.instance?.showStatus("Скажите: сос ${personal.sosPin}")
+            }
+        }
         post { VoiceAccessibilityService.instance?.execute(cmd) }
     }
 

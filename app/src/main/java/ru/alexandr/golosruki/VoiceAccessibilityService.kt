@@ -498,15 +498,20 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     // --- Звонок ---
     private fun doCall(number: String) {
+        if (number.isBlank()) { showStatus("Номер не задан"); return }
+        Logger.log("ACC", "Звоню на $number")
         try {
             val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$number"))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
         } catch (e: SecurityException) {
-            // нет разрешения CALL_PHONE — откроем набор номера
+            Logger.log("ACC", "Нет CALL_PHONE — открываю набор")
             val dial = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number"))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(dial)
+        } catch (e: Exception) {
+            Logger.log("ACC", "Ошибка звонка: ${e.message}")
+            showStatus("Ошибка звонка")
         }
     }
 

@@ -24,6 +24,8 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var invVCheck: android.widget.CheckBox
     private lateinit var invHCheck: android.widget.CheckBox
     private lateinit var strengthField: EditText
+    private lateinit var bigModelCheck: android.widget.CheckBox
+    private lateinit var modelStatus: android.widget.TextView
     private val nameFields = mutableListOf<EditText>()
     private val numberFields = mutableListOf<EditText>()
     private val openPhraseFields = mutableListOf<EditText>()
@@ -133,9 +135,45 @@ class SettingsActivity : ComponentActivity() {
         }
         col.addView(oc)
 
+        // --- Точность распознавания (большая модель) ---
+        val mc = UiKit.card(this)
+        mc.addView(UiKit.sectionHeader(this, "Точность распознавания"))
+        mc.addView(UiKit.body(this, "Большая модель (≈1.8 ГБ) распознаёт имена и редкие слова заметно лучше. Нужен интернет для разовой загрузки, ~4 ГБ свободного места и больше оперативной памяти. Малая работает всегда."))
+        bigModelCheck = android.widget.CheckBox(this).apply {
+            text = "Использовать большую модель"; textSize = 15f
+            isChecked = SettingsStore.getBigModel(this@SettingsActivity)
+            isEnabled = ModelDownloader.isReady(this@SettingsActivity)
+        }
+        mc.addView(bigModelCheck)
+        modelStatus = UiKit.body(this, if (ModelDownloader.isReady(this)) "Статус: большая модель загружена ✅" else "Статус: большая модель не загружена")
+        mc.addView(modelStatus)
+        mc.addView(UiKit.button(this, "⬇️ Скачать большую модель (1.8 ГБ)") { startBigDownload() })
+        mc.addView(UiKit.button(this, "🗑 Удалить большую модель", R.drawable.btn_danger) {
+            ModelDownloader.delete(this)
+            SettingsStore.setBigModel(this, false)
+            bigModelCheck.isChecked = false; bigModelCheck.isEnabled = false
+            modelStatus.text = "Статус: большая модель удалена"
+        })
+        col.addView(mc)
+
         col.addView(UiKit.button(this, "💾 Сохранить и перезапустить", R.drawable.btn_amber) { save() })
 
         setContentView(ScrollView(this).apply { addView(col) })
+    }
+
+    private fun startBigDownload() {
+        if (ModelDownloader.running) { Toast.makeText(this, "Загрузка уже идёт", Toast.LENGTH_SHORT).show(); return }
+        modelStatus.text = "Скачивание… 0% (не закрывайте экран)"
+        ModelDownloader.download(this,
+            onProgress = { pct ->
+                modelStatus.text = if (pct < 82) "Скачивание… $pct%" else if (pct < 100) "Распаковка…" else "Почти готово…"
+            },
+            onDone = {
+                modelStatus.text = "Готово ✅ Включите галочку и нажмите «Сохранить»"
+                bigModelCheck.isEnabled = true; bigModelCheck.isChecked = true
+            },
+            onError = { msg -> modelStatus.text = "Ошибка загрузки: $msg" }
+        )
     }
 
     private fun field(type: Int): EditText = EditText(this).apply {
@@ -184,6 +222,7 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setIgnoreMedia(this, ignoreMediaCheck.isChecked)
         SettingsStore.setVibrate(this, vibrateCheck.isChecked)
         SettingsStore.setKeepScreen(this, keepScreenCheck.isChecked)
+        SettingsStore.setBigModel(this, bigModelCheck.isChecked && ModelDownloader.isReady(this))
         SettingsStore.setSwipeInvertV(this, invVCheck.isChecked)
         SettingsStore.setSwipeInvertH(this, invHCheck.isChecked)
         SettingsStore.setSwipeStrength(this, strengthField.text.toString().toIntOrNull()?.coerceIn(1, 5) ?: 2)

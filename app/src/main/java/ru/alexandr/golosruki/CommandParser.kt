@@ -44,9 +44,10 @@ object CommandParser {
             return Command.Dictation
 
         // 0.3 Персональные: позвонить
-        if (t.contains("позвони") || t.contains("набери") || t.contains("звонок")) {
+        if (t.contains("позвони") || t.contains("набери") || t.contains("вызови") || t.contains("звонок")) {
             val hit = matchContact(t, personal.contacts)
             if (hit != null) return Command.CallContact(hit.first, hit.second)
+            return Command.Unknown   // «позвони …» не должно превращаться в тап/свайп по числу
         }
         // 0.35 Кастомные команды запуска (своя фраза -> приложение)
         for ((phrase, pkg) in personal.customApps) {
@@ -155,18 +156,25 @@ object CommandParser {
         }
     }
 
-    /** Совпадение контакта с учётом склонений (основа слова) и опечаток распознавания. */
+    /** Совпадение контакта: учитывает склонения, искажения распознавания и разбиение слова. */
     private fun matchContact(t: String, contacts: Map<String, String>): Pair<String, String>? {
-        val words = t.split(" ").filter { it.isNotBlank() && it != "позвони" && it != "набери" && it != "звонок" }
-        for ((name, num) in contacts) {
-            if (num.isBlank()) continue
-            if (t.contains(name)) return name to num
+        val trig = setOf("позвони", "набери", "звонок", "вызови")
+        val words = t.split(" ").filter { it.isNotBlank() && it !in trig }
+        if (words.isEmpty()) return null
+        val joined = words.joinToString("")          // «жюри ку» -> «жюрику»
+        val phrase = words.joinToString(" ")          // «любимой жене»
+        // сначала проверяем более длинные (конкретные) имена
+        val sorted = contacts.entries.filter { it.value.isNotBlank() }.sortedByDescending { it.key.length }
+        for (e in sorted) {
+            val name = e.key; val num = e.value
+            val nameJoined = name.replace(" ", "")
+            if (phrase.contains(name) || t.contains(name)) return name to num
+            if (nameJoined.length >= 4 && (joined.contains(nameJoined) || nameJoined.contains(joined))) return name to num
             val stem = name.take(maxOf(3, name.length - 2))
-            if (stem.length >= 3 && words.any { it.startsWith(stem) || name.startsWith(it.take(maxOf(3, it.length - 1))) })
-                return name to num
-            // нечётко: близкое по написанию слово (ошибка распознавания)
-            if (name.length >= 4 && words.any { it.length >= 4 && levenshtein(it, name) <= 2 })
-                return name to num
+            if (stem.length >= 3 && words.any { it.startsWith(stem) }) return name to num
+            // нечётко: по склеенной строке (исправляет «жюри ку»→«жорику») и по отдельным словам
+            if (nameJoined.length >= 4 && joined.length >= 4 && levenshtein(joined, nameJoined) <= 2) return name to num
+            if (name.length >= 4 && words.any { it.length >= 3 && levenshtein(it, name) <= 2 }) return name to num
         }
         return null
     }

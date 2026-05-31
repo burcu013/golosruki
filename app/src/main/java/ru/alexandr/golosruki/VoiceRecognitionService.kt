@@ -41,6 +41,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var dictation = false
     @Volatile private var dictationDigits = false
     private val dictBuffer = StringBuilder()
+    @Volatile private var bigModelActive = false
 
     private val idleRunnable = Runnable {
         state = State.ASLEEP
@@ -170,7 +171,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         Thread {
             try {
                 Logger.log("REC", "Установка модели…")
-                val path = ModelInstaller.ensureModel(this)
+                val useBig = SettingsStore.getBigModel(this) && ModelDownloader.isReady(this)
+                val path = if (useBig) ModelDownloader.resolveModelDir(this)!! else ModelInstaller.ensureModel(this)
+                bigModelActive = useBig
+                Logger.log("MODEL", if (useBig) "Большая модель: $path" else "Малая модель: $path")
                 val m = Model(path)
                 Logger.log("REC", "Модель загружена, запуск прослушивания")
                 handler.post { model = m; startListening(grammar = true); refreshNotification() }
@@ -182,13 +186,14 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     private fun startListening(grammar: Boolean) {
-        val rec = if (grammar)
+        val useGrammar = grammar && !bigModelActive   // большая модель статична — только свободный режим
+        val rec = if (useGrammar)
             Recognizer(model, 16000.0f, Vocabulary.buildGrammar(personal, wakeWord))
         else
             Recognizer(model, 16000.0f)
         speechService = SpeechService(rec, 16000.0f)
         speechService?.startListening(this)
-        Logger.log("REC", "Слушаю (грамматика=$grammar)")
+        Logger.log("REC", "Слушаю (грамматика=$useGrammar)")
     }
 
     private fun restart(grammar: Boolean) {

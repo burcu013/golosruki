@@ -38,6 +38,9 @@ object SettingsStore {
     fun getKeepScreen(ctx: Context): Boolean = p(ctx).getBoolean("keep_screen", true)
     fun setKeepScreen(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("keep_screen", v).apply()
 
+    fun getBigModel(ctx: Context): Boolean = p(ctx).getBoolean("big_model", false)
+    fun setBigModel(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("big_model", v).apply()
+
     /** Контакты: имя(дат. падеж) -> номер. */
     fun getContacts(ctx: Context): Map<String, String> {
         val raw = p(ctx).getString("contacts", null) ?: return emptyMap()

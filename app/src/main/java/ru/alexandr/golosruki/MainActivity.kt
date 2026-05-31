@@ -5,10 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.widget.Button
-import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 
@@ -20,64 +17,39 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val col = UiKit.column(this)
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 72, 48, 48)
-        }
+        col.addView(UiKit.title(this, "ГолосРуки"))
+        col.addView(UiKit.subtitle(this, "Управление телефоном голосом. Активация словом «Иван»."))
 
-        root.addView(TextView(this).apply { text = "ГолосРуки"; textSize = 30f })
-        root.addView(TextView(this).apply {
-            text = "Управление телефоном голосом. Выполните 3 шага по порядку."
-            textSize = 16f; setPadding(0, 16, 0, 28)
+        // Настройка
+        val setup = UiKit.card(this)
+        setup.addView(UiKit.sectionHeader(this, "Настройка (по порядку)"))
+        setup.addView(UiKit.button(this, "1. Выдать разрешения") { requestPerms() })
+        setup.addView(UiKit.button(this, "2. Включить службу спец. возможностей") {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         })
+        setup.addView(UiKit.button(this, "3. Запустить голосовое управление", R.drawable.btn_amber) { startVoice() })
+        col.addView(setup)
 
-        root.addView(Button(this).apply {
-            text = "1. Выдать разрешения"
-            setOnClickListener { requestPerms() }
-        })
-        root.addView(Button(this).apply {
-            text = "2. Включить службу спец. возможностей"
-            setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-        })
-        root.addView(Button(this).apply {
-            text = "3. Запустить голосовое управление"
-            setOnClickListener { startVoice() }
-        })
+        // Разделы
+        val nav = UiKit.card(this)
+        nav.addView(UiKit.sectionHeader(this, "Разделы"))
+        nav.addView(UiKit.button(this, "📖 Гайд по управлению") { open(GuideActivity::class.java) })
+        nav.addView(UiKit.button(this, "⚙️ Настройки под человека") { open(SettingsActivity::class.java) })
+        col.addView(nav)
 
-        root.addView(Button(this).apply {
-            text = "🎤 ТЕСТ микрофона (диагностика)"
-            setOnClickListener { startActivity(Intent(this@MainActivity, TestActivity::class.java)) }
-        })
+        // Диагностика
+        val diag = UiKit.card(this)
+        diag.addView(UiKit.sectionHeader(this, "Диагностика (удалить после тестов)"))
+        diag.addView(UiKit.button(this, "🎤 Тест микрофона") { open(TestActivity::class.java) })
+        diag.addView(UiKit.button(this, "📋 Логи") { open(LogActivity::class.java) })
+        col.addView(diag)
 
-        root.addView(Button(this).apply {
-            text = "📋 Логи"
-            setOnClickListener { startActivity(Intent(this@MainActivity, LogActivity::class.java)) }
-        })
-
-        root.addView(TextView(this).apply {
-            text = """
-                АКТИВАЦИЯ: скажите «Иван». После 30 сек тишины — снова «Иван».
-                Разблокировка экрана: «Иван привет».
-
-                Примеры команд (после «Иван»):
-                • назад, домой, недавние, шторка
-                • номера → нажми 5
-                • сетка → нажми 7 → нажми 3  (точное попадание, 12 ячеек)
-                • листай вверх / вниз / влево / вправо
-                • позвони жене, открой телеграм
-                • напиши … / диктовка … готово
-                • сос  (звонок + СМС с геолокацией)
-                • стоп / слушай, помощь
-
-                Персональные контакты и приложения — в файле
-                assets/personal_commands.json (отредактируйте под себя).
-            """.trimIndent()
-            textSize = 15f; setPadding(0, 36, 0, 0)
-        })
-
-        setContentView(ScrollView(this).apply { addView(root) })
+        setContentView(ScrollView(this).apply { addView(col) })
     }
+
+    private fun open(c: Class<*>) = startActivity(Intent(this, c))
 
     private fun requestPerms() {
         val perms = mutableListOf(

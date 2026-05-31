@@ -12,18 +12,25 @@ data class PersonalConfig(
 ) {
     companion object {
         fun load(context: Context): PersonalConfig {
+            val asset = loadAsset(context)
+            // Настройки из приложения имеют приоритет
+            val savedContacts = SettingsStore.getContacts(context)
+            val contacts = if (savedContacts.isNotEmpty()) savedContacts else asset.contacts
+            val sosNum = SettingsStore.getSosNumber(context).ifBlank { asset.sosNumber }
+            val sosTxt = SettingsStore.getSosText(context).ifBlank { asset.sosText }
+            return PersonalConfig(contacts, asset.apps, sosNum, sosTxt)
+        }
+
+        private fun loadAsset(context: Context): PersonalConfig {
             return try {
                 val json = context.assets.open("personal_commands.json")
                     .bufferedReader().use { it.readText() }
                 val obj = JSONObject(json)
-                val contacts = obj.optJSONObject("контакты").toMap()
-                val apps = obj.optJSONObject("приложения").toMap()
-                val sos = obj.optJSONObject("sos")
                 PersonalConfig(
-                    contacts = contacts,
-                    apps = apps,
-                    sosNumber = sos?.optString("номер") ?: "",
-                    sosText = sos?.optString("текст") ?: "Нужна срочная помощь"
+                    contacts = obj.optJSONObject("контакты").toMap(),
+                    apps = obj.optJSONObject("приложения").toMap(),
+                    sosNumber = obj.optJSONObject("sos")?.optString("номер") ?: "",
+                    sosText = obj.optJSONObject("sos")?.optString("текст") ?: "Нужна срочная помощь"
                 )
             } catch (e: Exception) {
                 PersonalConfig(emptyMap(), emptyMap(), "", "Нужна срочная помощь")

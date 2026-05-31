@@ -24,8 +24,10 @@ object CommandParser {
         if (t.contains("сос") || t.contains("спасите") || t.contains("тревога") || t.contains("помогите"))
             return Command.Sos
 
-        // 0.2 Диктовка
-        if (t.contains("диктовка") || t.contains("печатать")) return Command.Dictation
+        // 0.2 Диктовка / ввод текста — только через свободный распознаватель
+        if (t.contains("диктовка") || t.contains("печатать") ||
+            t.contains("напиши") || t.contains("введи") || t.contains("набрать текст"))
+            return Command.Dictation
 
         // 0.3 Персональные: позвонить
         if (t.contains("позвони") || t.contains("набери")) {
@@ -77,14 +79,7 @@ object CommandParser {
             }
         }
 
-        // 4. Ввод текста одной фразой: «напиши ...»
-        for (kw in listOf("напиши", "введи", "набери", "текст")) {
-            val idx = t.indexOf(kw)
-            if (idx >= 0) {
-                val text = t.substring(idx + kw.length).trim()
-                if (text.isNotEmpty()) return Command.TypeText(text)
-            }
-        }
+        // 4. (Ввод текста выполняется в режиме диктовки — см. п.0.2)
 
         return Command.Unknown
     }

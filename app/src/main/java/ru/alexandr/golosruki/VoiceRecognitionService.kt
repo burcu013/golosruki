@@ -19,9 +19,8 @@ import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
 
 /**
- * Слушает микрофон офлайн (Vosk).
- * Активация по имени «Иван». Через 30 сек простоя — сон (нужно снова сказать «Иван»).
- * «Иван привет» — пробуждение/разблокировка. Грамматика повышает точность.
+ * Слушает микрофон офлайн (Vosk). Активация по слову (по умолч. «Иван»).
+ * Через N сек простоя — сон. «<слово> привет» — разблокировка. Состояние — в шторке.
  */
 class VoiceRecognitionService : Service(), RecognitionListener {
 
@@ -30,22 +29,28 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private lateinit var personal: PersonalConfig
     private val handler = Handler(Looper.getMainLooper())
 
+    private var wakeWord = "иван"
+    private var idleMs = 30_000L
+
     private enum class State { ASLEEP, AWAKE }
     @Volatile private var state = State.ASLEEP
     @Volatile private var dictation = false
 
     private val idleRunnable = Runnable {
         state = State.ASLEEP
-        VoiceAccessibilityService.instance?.showStatus("Сон. Скажите: Иван")
+        VoiceAccessibilityService.instance?.showStatus("Сон. Скажите: ${cap(wakeWord)}")
+        refreshNotification()
     }
 
     companion object {
         const val CHANNEL_ID = "golosruki_voice"
-        const val IDLE_MS = 30_000L
-        const val WAKE = "иван"
+        const val NOTIF_ID = 1
         @Volatile var instance: VoiceRecognitionService? = null
         @Volatile private var paused = false
-        fun setPaused(p: Boolean) { paused = p }
+        fun setPaused(p: Boolean) {
+            paused = p
+            instance?.let { svc -> svc.handler.post { svc.refreshNotification() } }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -53,25 +58,51 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        paused = false
         personal = PersonalConfig.load(this)
-        val notif = buildNotification()
+        wakeWord = SettingsStore.getWake(this)
+        idleMs = SettingsStore.getIdle(this) * 1000L
+        Logger.log("REC", "Старт службы. Слово активации: '$wakeWord', сон: ${idleMs / 1000}с")
+
+        val notif = buildNotification("Запуск…")
         if (Build.VERSION.SDK_INT >= 29)
-            startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        else startForeground(1, notif)
+            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        else startForeground(NOTIF_ID, notif)
         initModel()
     }
 
-    private fun buildNotification(): Notification {
+    private fun cap(s: String) = s.replaceFirstChar { it.uppercase() }
+
+    private fun stateText(): String = when {
+        dictation -> "✍️ Диктовка — говорите текст, «готово» для выхода"
+        paused -> "⏸ Пауза — скажите «слушай»"
+        state == State.AWAKE -> "🎙 Слушаю команды"
+        else -> "😴 Сон — скажите «${cap(wakeWord)}»"
+    }
+
+    private fun buildNotification(text: String): Notification {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26)
             nm.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID, "Голосовое управление", NotificationManager.IMPORTANCE_LOW)
             )
+        val tap = Intent(this, MainActivity::class.java)
+        val pi = android.app.PendingIntent.getActivity(
+            this, 0, tap,
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
         return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("ГолосРуки активен")
-            .setContentText("Скажите «Иван» для активации")
+            .setContentTitle("ГолосРуки")
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setOngoing(true)
+            .setContentIntent(pi)
             .build()
+    }
+
+    fun refreshNotification() {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIF_ID, buildNotification(stateText()))
     }
 
     private fun initModel() {
@@ -81,19 +112,17 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 val path = ModelInstaller.ensureModel(this)
                 val m = Model(path)
                 Logger.log("REC", "Модель загружена, запуск прослушивания")
-                handler.post { model = m; startListening(grammar = true) }
+                handler.post { model = m; startListening(grammar = true); refreshNotification() }
             } catch (e: Exception) {
                 Logger.log("REC", "Ошибка модели: ${e.message}")
-                handler.post {
-                    VoiceAccessibilityService.instance?.showStatus("Ошибка модели: ${e.message}")
-                }
+                handler.post { VoiceAccessibilityService.instance?.showStatus("Ошибка модели: ${e.message}") }
             }
         }.start()
     }
 
     private fun startListening(grammar: Boolean) {
         val rec = if (grammar)
-            Recognizer(model, 16000.0f, Vocabulary.buildGrammar(personal))
+            Recognizer(model, 16000.0f, Vocabulary.buildGrammar(personal, wakeWord))
         else
             Recognizer(model, 16000.0f)
         speechService = SpeechService(rec, 16000.0f)
@@ -108,32 +137,31 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.postDelayed({ startListening(grammar) }, 200)
     }
 
-    /** Включить режим диктовки (свободный текст). */
     fun enterDictation() {
         dictation = true
         VoiceAccessibilityService.instance?.showStatus("Диктовка: говорите текст, «готово» — выход")
         restart(grammar = false)
-        resetIdle()
+        resetIdle(); refreshNotification()
     }
 
     private fun exitDictation() {
         dictation = false
         VoiceAccessibilityService.instance?.showStatus("Команды активны")
         restart(grammar = true)
-        resetIdle()
+        resetIdle(); refreshNotification()
     }
 
     private fun resetIdle() {
         handler.removeCallbacks(idleRunnable)
-        handler.postDelayed(idleRunnable, IDLE_MS)
+        handler.postDelayed(idleRunnable, idleMs)
     }
 
     override fun onResult(hypothesis: String?) {
-        val text = hypothesis?.let { JSONObject(it).optString("text") } ?: return
+        val raw = hypothesis?.let { JSONObject(it).optString("text") } ?: return
+        val text = raw.replace("[unk]", " ").trim()
         if (text.isBlank()) return
-        Logger.log("REC", "Распознано: '$text' (state=$state, dict=$dictation)")
+        Logger.log("REC", "Распознано: '$text' (state=$state, paused=$paused, dict=$dictation)")
 
-        // Режим диктовки: всё печатаем, кроме слов выхода
         if (dictation) {
             if (text.contains("готово") || text.contains("конец")) { exitDictation(); return }
             resetIdle()
@@ -141,43 +169,51 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             return
         }
 
-        val hasWake = text.contains(WAKE)
+        val isWake = text.contains(wakeWord)
+        val isResume = text.contains("слушай") || text.contains("продолжи")
 
-        if (state == State.ASLEEP) {
-            if (!hasWake) return                       // спим — ждём «Иван»
+        if (isWake || isResume) {
             state = State.AWAKE
+            if (paused) { setPaused(false); Logger.log("REC", "Пауза снята") }
             resetIdle()
-            val rest = stripWake(text)
+            val rest = if (isWake) stripWake(text) else stripResume(text)
+            refreshNotification()
             if (rest.isBlank()) {
-                VoiceAccessibilityService.instance?.showStatus("Иван слушает")
+                VoiceAccessibilityService.instance?.showStatus("${cap(wakeWord)} слушает")
                 return
             }
             handleCommand(rest)
-        } else {                                        // AWAKE
-            resetIdle()
-            val cleaned = if (hasWake) stripWake(text) else text
-            if (cleaned.isBlank()) return
-            handleCommand(cleaned)
+            return
         }
+
+        if (state == State.ASLEEP) return
+        resetIdle()
+        if (paused) { VoiceAccessibilityService.instance?.showStatus("Пауза. Скажите: слушай"); return }
+        handleCommand(text)
     }
 
     private fun handleCommand(text: String) {
-        if (paused) {
-            // на паузе слушаем только «слушай/продолжи»
-            if (!(text.contains("слушай") || text.contains("продолжи"))) return
-        }
         val cmd = CommandParser.parse(text, personal)
         Logger.log("CMD", "Команда: ${cmd.label()}")
         post { VoiceAccessibilityService.instance?.execute(cmd) }
     }
 
-    private fun stripWake(t: String): String = t.replace(WAKE, "").trim()
-
+    private fun stripWake(t: String) = t.replace(wakeWord, "").trim()
+    private fun stripResume(t: String) = t.replace("слушай", "").replace("продолжи", "").trim()
     private fun post(action: () -> Unit) = handler.post(action)
 
     override fun onFinalResult(hypothesis: String?) { onResult(hypothesis) }
-    override fun onPartialResult(hypothesis: String?) {}
-    override fun onError(e: Exception?) { Log.e("GolosRuki", "Ошибка: ${e?.message}") }
+
+    override fun onPartialResult(hypothesis: String?) {
+        if (!dictation) return
+        val p = hypothesis?.let { JSONObject(it).optString("partial") } ?: return
+        if (p.isNotBlank()) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIF_ID, buildNotification("✍️ $p"))
+        }
+    }
+
+    override fun onError(e: Exception?) { Logger.log("REC", "Ошибка: ${e?.message}") }
     override fun onTimeout() {}
 
     override fun onDestroy() {

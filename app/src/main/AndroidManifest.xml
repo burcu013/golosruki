@@ -15,9 +15,11 @@
 
     <application
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light">
+        android:theme="@style/Theme.GolosRuki">
 
         <activity
             android:name=".MainActivity"
@@ -37,6 +39,9 @@
         <activity
             android:name=".LogActivity"
             android:exported="false" />
+
+        <activity android:name=".GuideActivity" android:exported="false" />
+        <activity android:name=".SettingsActivity" android:exported="false" />
 
         <!-- Активность пробуждения/разблокировки экрана -->
         <activity

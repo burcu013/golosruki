@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.GolosRuki" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:colorPrimary">@color/teal</item>
+        <item name="android:colorPrimaryDark">@color/tealDark</item>
+        <item name="android:colorAccent">@color/amber</item>
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/tealDark</item>
+    </style>
+</resources>

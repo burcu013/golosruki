@@ -70,7 +70,7 @@ class VoiceAccessibilityService : AccessibilityService() {
             Command.Screenshot -> if (Build.VERSION.SDK_INT >= 28) performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT)
             Command.Unlock -> doUnlock()
             Command.Sos -> doSos()
-            is Command.Swipe -> doSwipe(command.direction)
+            is Command.Swipe -> doScroll(command.direction)
             Command.ShowNumbers -> showNumbers()
             Command.Grid -> showGrid()
             Command.HideOverlay -> { mode = Mode.NONE; targets.clear(); overlay.clearTargets() }
@@ -95,25 +95,62 @@ class VoiceAccessibilityService : AccessibilityService() {
         return dm.widthPixels to dm.heightPixels
     }
 
-    // --- Свайпы ---
-    private fun doSwipe(direction: Direction) {
+    // --- Скролл: сначала пробуем прокрутить нужный контейнер, иначе жест по центру ---
+    private fun doScroll(direction: Direction) {
+        if (direction == Direction.UP || direction == Direction.DOWN) {
+            val node = findScrollable(rootInActiveWindow)
+            if (node != null) {
+                val action = if (direction == Direction.DOWN)
+                    AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                if (node.performAction(action)) { Logger.log("ACC", "Скролл узла"); return }
+            }
+        }
+        gestureScroll(direction)
+    }
+
+    private fun findScrollable(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        if (root == null) return null
+        var best: AccessibilityNodeInfo? = null
+        var bestArea = 0L
+        fun walk(n: AccessibilityNodeInfo?) {
+            if (n == null) return
+            if (n.isScrollable && n.isVisibleToUser) {
+                val r = Rect(); n.getBoundsInScreen(r)
+                val area = r.width().toLong() * r.height()
+                if (area > bestArea) { bestArea = area; best = n }
+            }
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(root)
+        return best
+    }
+
+    private fun gestureScroll(direction: Direction) {
         val (w, h) = screenSize()
-        val cx = w / 2f; val cy = h / 2f; val dx = w * 0.35f; val dy = h * 0.35f
+        val cx = w / 2f; val cy = h / 2f
+        // держим палец в центральной зоне, подальше от хедера и краёв (анти-back)
+        val topY = h * 0.32f; val botY = h * 0.68f
+        val leftX = w * 0.30f; val rightX = w * 0.70f
         val path = Path()
         when (direction) {
-            Direction.UP    -> { path.moveTo(cx, cy + dy); path.lineTo(cx, cy - dy) }
-            Direction.DOWN  -> { path.moveTo(cx, cy - dy); path.lineTo(cx, cy + dy) }
-            Direction.LEFT  -> { path.moveTo(cx + dx, cy); path.lineTo(cx - dx, cy) }
-            Direction.RIGHT -> { path.moveTo(cx - dx, cy); path.lineTo(cx + dx, cy) }
+            Direction.DOWN  -> { path.moveTo(cx, botY); path.lineTo(cx, topY) }
+            Direction.UP    -> { path.moveTo(cx, topY); path.lineTo(cx, botY) }
+            Direction.LEFT  -> { path.moveTo(rightX, cy); path.lineTo(leftX, cy) }
+            Direction.RIGHT -> { path.moveTo(leftX, cy); path.lineTo(rightX, cy) }
         }
-        gesture(path, 300)
+        gesture(path, 320)
     }
 
     // --- Номера на кликабельных элементах ---
+    private var maxNodeArea = Long.MAX_VALUE
+
     private fun showNumbers() {
         mode = Mode.NUMBERS
         targets.clear()
         val root = rootInActiveWindow ?: run { showStatus("Нет активного окна"); return }
+        val (w, h) = screenSize()
+        maxNodeArea = (0.85 * w * h).toLong()
         val rects = mutableListOf<Rect>()
         collectClickable(root, rects)
         val labeled = mutableListOf<Pair<Int, Rect>>()
@@ -124,16 +161,23 @@ class VoiceAccessibilityService : AccessibilityService() {
             if (n > 200) break
         }
         overlay.showNumbers(labeled)
-        showStatus("Скажите: нажми + номер")
+        showStatus("Найдено: ${labeled.size}. Скажите: нажми + номер")
     }
 
     private fun collectClickable(node: AccessibilityNodeInfo?, out: MutableList<Rect>) {
         if (node == null) return
-        if (node.isVisibleToUser && (node.isClickable || node.isLongClickable || node.isCheckable)) {
+        if (node.isVisibleToUser && isCandidate(node)) {
             val r = Rect(); node.getBoundsInScreen(r)
-            if (r.width() > 0 && r.height() > 0) out.add(r)
+            val area = r.width().toLong() * r.height()
+            if (r.width() > 0 && r.height() > 0 && area in 1 until maxNodeArea) out.add(r)
         }
         for (i in 0 until node.childCount) collectClickable(node.getChild(i), out)
+    }
+
+    private fun isCandidate(n: AccessibilityNodeInfo): Boolean {
+        if (n.isClickable || n.isLongClickable || n.isCheckable || n.isEditable) return true
+        val hasText = !n.text.isNullOrBlank() || !n.contentDescription.isNullOrBlank()
+        return n.isFocusable && hasText
     }
 
     private fun isClose(a: Rect, b: Rect) =
@@ -177,7 +221,7 @@ class VoiceAccessibilityService : AccessibilityService() {
             }
             Mode.GRID2 -> {
                 val cell = targets[number] ?: run { showStatus("Нет ячейки $number"); return }
-                doTap(cell.exactCenterX(), cell.exactCenterY(), kind)
+                tapSmart(cell, kind)   // прилипаем к кнопке внутри ячейки
                 resetOverlay()
             }
             else -> {  // NUMBERS или NONE
@@ -189,6 +233,37 @@ class VoiceAccessibilityService : AccessibilityService() {
     }
 
     private fun resetOverlay() { mode = Mode.NONE; targets.clear(); overlay.clearTargets() }
+
+    /** Нажатие с «прилипанием» к ближайшей кнопке внутри области. */
+    private fun tapSmart(cell: Rect, kind: TapKind) {
+        val node = findClickableIn(rootInActiveWindow, cell)
+        if (node != null) {
+            val r = Rect(); node.getBoundsInScreen(r)
+            doTap(r.exactCenterX(), r.exactCenterY(), kind)
+        } else {
+            doTap(cell.exactCenterX(), cell.exactCenterY(), kind)
+        }
+    }
+
+    private fun findClickableIn(root: AccessibilityNodeInfo?, cell: Rect): AccessibilityNodeInfo? {
+        if (root == null) return null
+        var best: AccessibilityNodeInfo? = null
+        var bestDist = Int.MAX_VALUE
+        val cxC = cell.centerX(); val cyC = cell.centerY()
+        fun walk(n: AccessibilityNodeInfo?) {
+            if (n == null) return
+            if (n.isVisibleToUser && (n.isClickable || n.isLongClickable || n.isCheckable)) {
+                val r = Rect(); n.getBoundsInScreen(r)
+                if (Rect.intersects(r, cell)) {
+                    val d = Math.abs(r.centerX() - cxC) + Math.abs(r.centerY() - cyC)
+                    if (d < bestDist) { bestDist = d; best = n }
+                }
+            }
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(root)
+        return best
+    }
 
     private fun doTap(x: Float, y: Float, kind: TapKind) {
         val p = Path().apply { moveTo(x, y); lineTo(x, y) }

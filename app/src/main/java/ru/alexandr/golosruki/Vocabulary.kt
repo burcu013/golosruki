@@ -31,12 +31,14 @@ object Vocabulary {
         "восемнадцать", "девятнадцать", "двадцать", "тридцать", "сорок", "пятьдесят"
     )
 
-    /** Строит JSON-грамматику с учётом персональных имён и приложений. */
-    fun buildGrammar(personal: PersonalConfig): String {
+    /** Строит JSON-грамматику с учётом слова активации, персональных имён и приложений. */
+    fun buildGrammar(personal: PersonalConfig, wakeWord: String): String {
         val words = base.toMutableSet()
+        wakeWord.split(" ").forEach { if (it.isNotBlank()) words.add(it) }
         personal.contacts.keys.forEach { name -> name.split(" ").forEach { words.add(it) } }
         personal.apps.keys.forEach { name -> name.split(" ").forEach { words.add(it) } }
         val json = words.joinToString(",") { "\"$it\"" }
-        return "[$json]"
+        // [unk] позволяет модели выдавать «неизвестно» вместо подбора ближайшего слова к шуму
+        return "[$json,\"[unk]\"]"
     }
 }

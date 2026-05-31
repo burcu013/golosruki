@@ -1,0 +1,11 @@
+<resources>
+    <color name="teal">#0E7C7B</color>
+    <color name="tealDark">#0A5C5B</color>
+    <color name="amber">#E8923B</color>
+    <color name="bg">#F4F6F6</color>
+    <color name="card">#FFFFFF</color>
+    <color name="text">#1C1E22</color>
+    <color name="muted">#5A6370</color>
+    <color name="danger">#D64545</color>
+    <color name="white">#FFFFFF</color>
+</resources>

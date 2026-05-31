@@ -18,6 +18,8 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var sosNum: EditText
     private lateinit var sosTxt: EditText
     private lateinit var ignoreMediaCheck: android.widget.CheckBox
+    private lateinit var vibrateCheck: android.widget.CheckBox
+    private lateinit var keepScreenCheck: android.widget.CheckBox
     private lateinit var invVCheck: android.widget.CheckBox
     private lateinit var invHCheck: android.widget.CheckBox
     private lateinit var strengthField: EditText
@@ -47,6 +49,16 @@ class SettingsActivity : ComponentActivity() {
             isChecked = SettingsStore.getIgnoreMedia(this@SettingsActivity)
         }
         a.addView(ignoreMediaCheck)
+        vibrateCheck = android.widget.CheckBox(this).apply {
+            text = "Вибро-отклик при активации"; textSize = 15f
+            isChecked = SettingsStore.getVibrate(this@SettingsActivity)
+        }
+        a.addView(vibrateCheck)
+        keepScreenCheck = android.widget.CheckBox(this).apply {
+            text = "Не гасить экран, пока активен"; textSize = 15f
+            isChecked = SettingsStore.getKeepScreen(this@SettingsActivity)
+        }
+        a.addView(keepScreenCheck)
         col.addView(a)
 
         // Калибровка свайпов
@@ -63,7 +75,7 @@ class SettingsActivity : ComponentActivity() {
             isChecked = SettingsStore.getSwipeInvertH(this@SettingsActivity)
         }
         cal.addView(invHCheck)
-        cal.addView(UiKit.body(this, "Сила свайпа (1 короткий – 3 длинный):"))
+        cal.addView(UiKit.body(this, "Сила свайпа (1 очень мягкий – 5 сильный):"))
         strengthField = field(InputType.TYPE_CLASS_NUMBER).also { it.setText(SettingsStore.getSwipeStrength(this).toString()) }
         cal.addView(strengthField)
         col.addView(cal)
@@ -164,9 +176,11 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setSosNumber(this, sosNum.text.toString())
         SettingsStore.setSosText(this, sosTxt.text.toString())
         SettingsStore.setIgnoreMedia(this, ignoreMediaCheck.isChecked)
+        SettingsStore.setVibrate(this, vibrateCheck.isChecked)
+        SettingsStore.setKeepScreen(this, keepScreenCheck.isChecked)
         SettingsStore.setSwipeInvertV(this, invVCheck.isChecked)
         SettingsStore.setSwipeInvertH(this, invHCheck.isChecked)
-        SettingsStore.setSwipeStrength(this, strengthField.text.toString().toIntOrNull()?.coerceIn(1, 3) ?: 2)
+        SettingsStore.setSwipeStrength(this, strengthField.text.toString().toIntOrNull()?.coerceIn(1, 5) ?: 2)
 
         val contacts = mutableMapOf<String, String>()
         for (i in nameFields.indices) {

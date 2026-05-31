@@ -100,6 +100,7 @@ class VoiceAccessibilityService : AccessibilityService() {
             is Command.Drag -> drag(command.from, command.to)
             is Command.ScrollEdge -> scrollEdge(command.direction)
             Command.Paste -> paste()
+            Command.TapCenter -> { val (w, h) = screenSize(); doTap(w / 2f, h / 2f, TapKind.SINGLE) }
             is Command.CallContact -> doCall(command.number)
             is Command.OpenApp -> openApp(command.pkg)
             Command.Help -> overlay.showHelp()
@@ -134,7 +135,9 @@ class VoiceAccessibilityService : AccessibilityService() {
         // калибровка
         val invV = SettingsStore.getSwipeInvertV(this)
         val invH = SettingsStore.getSwipeInvertH(this)
-        val frac = when (SettingsStore.getSwipeStrength(this)) { 1 -> 0.20f; 3 -> 0.42f; else -> 0.30f }
+        val frac = when (SettingsStore.getSwipeStrength(this)) {
+            1 -> 0.10f; 2 -> 0.16f; 3 -> 0.24f; 4 -> 0.34f; 5 -> 0.45f; else -> 0.16f
+        }
         val dy = h * frac; val dx = w * frac
 
         var dir = direction

@@ -40,10 +40,9 @@ object CommandParser {
             return Command.Dictation
 
         // 0.3 Персональные: позвонить
-        if (t.contains("позвони") || t.contains("набери")) {
-            for ((name, num) in personal.contacts) {
-                if (num.isNotBlank() && t.contains(name)) return Command.CallContact(name, num)
-            }
+        if (t.contains("позвони") || t.contains("набери") || t.contains("звонок")) {
+            val hit = matchContact(t, personal.contacts)
+            if (hit != null) return Command.CallContact(hit.first, hit.second)
         }
         // 0.35 Кастомные команды запуска (своя фраза -> приложение)
         for ((phrase, pkg) in personal.customApps) {
@@ -61,9 +60,10 @@ object CommandParser {
         when {
             t.contains("назад") || t.contains("выход") -> return Command.Back
             t.contains("домой") || t.contains("главный экран") -> return Command.Home
-            t.contains("недавн") || t.contains("переключатель") -> return Command.Recents
+            t.contains("недавн") || t.contains("свёрнут") || t.contains("свернут") -> return Command.Recents
+            t.contains("быстрые") || t.contains("переключател") || t.contains("панель") ||
+                (t.contains("шторк") && t.contains("настро")) -> return Command.QuickSettings
             t.contains("шторк") || t.contains("уведомлен") -> return Command.Notifications
-            t.contains("быстрые настройки") -> return Command.QuickSettings
             t.contains("заблокир") || t == "блокировка" -> return Command.Lock
             t.contains("скриншот") || t.contains("снимок экрана") -> return Command.Screenshot
             t.contains("помощь") || t.contains("команды") -> return Command.Help
@@ -139,10 +139,26 @@ object CommandParser {
             t.contains("без звука") || t.contains("выключи звук") -> Command.VolumeMute
             t.contains("пауза") || t.contains("останови") || t.contains("стоп") -> Command.MediaPause
             t.contains("воспроизв") || t.contains("играй") || t.contains("плей") || t.contains("продолж") -> Command.MediaPlay
+            // короткие видео (шортс/рилс/клипы): листание и тап для паузы/плей
+            t.contains("вверх") || t.contains("предыдущ") -> Command.Swipe(Direction.UP)
+            t.contains("вниз") || t.contains("дальше") || t.contains("следующ") -> Command.Swipe(Direction.DOWN)
+            t.contains("тап") || t.contains("центр") || t.contains("нажми") -> Command.TapCenter
             t.contains("назад") || t.contains("выход") || t.contains("закрой") -> Command.Back
             t.contains("домой") -> Command.Home
             else -> null
         }
+    }
+
+    /** Совпадение контакта с учётом склонений (по основе слова). */
+    private fun matchContact(t: String, contacts: Map<String, String>): Pair<String, String>? {
+        val words = t.split(" ").filter { it.isNotBlank() }
+        for ((name, num) in contacts) {
+            if (num.isBlank()) continue
+            if (t.contains(name)) return name to num
+            val stem = name.take(maxOf(3, name.length - 2))
+            if (stem.length >= 3 && words.any { it.startsWith(stem) }) return name to num
+        }
+        return null
     }
 
     private fun dirOf(t: String): Direction? = when {

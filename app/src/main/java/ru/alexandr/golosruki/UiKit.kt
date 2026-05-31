@@ -65,6 +65,24 @@ object UiKit {
             setOnClickListener { onClick() }
         }
 
+    /** Компактная кнопка со значком, текст слева. */
+    fun iconButton(ctx: Context, text: String, bg: Int = R.drawable.btn_primary, onClick: () -> Unit): Button =
+        Button(ctx).apply {
+            this.text = text
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            isAllCaps = false
+            gravity = Gravity.CENTER_VERTICAL or Gravity.START
+            setBackgroundResource(bg)
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            lp.topMargin = dp(ctx, 8)
+            layoutParams = lp
+            setPadding(dp(ctx, 18), dp(ctx, 11), dp(ctx, 14), dp(ctx, 11))
+            setOnClickListener { onClick() }
+        }
+
     fun card(ctx: Context): LinearLayout = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
         setBackgroundResource(R.drawable.card_bg)

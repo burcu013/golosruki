@@ -28,32 +28,29 @@ class MainActivity : ComponentActivity() {
 
         col.addView(buildHeader())
 
-        // Настройка
         val setup = UiKit.card(this)
         setup.addView(UiKit.sectionHeader(this, "Настройка (по порядку)"))
-        setup.addView(UiKit.button(this, "1. Выдать разрешения") { requestPerms() })
-        setup.addView(UiKit.button(this, "2. Включить службу спец. возможностей") {
+        setup.addView(UiKit.iconButton(this, "①  Выдать разрешения") { requestPerms() })
+        setup.addView(UiKit.iconButton(this, "②  Включить спец. возможности") {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         })
-        setup.addView(UiKit.button(this, "3. Запустить голосовое управление", R.drawable.btn_amber) { startVoice() })
-        setup.addView(UiKit.button(this, "🔁 Перезапустить Иван (сброс)") { resetVoice() })
+        setup.addView(UiKit.iconButton(this, "③  ▶ Запустить управление", R.drawable.btn_amber) { startVoice() })
+        setup.addView(UiKit.iconButton(this, "🔁  Перезапустить Иван") { resetVoice() })
         col.addView(setup)
 
-        // Разделы
         val nav = UiKit.card(this)
         nav.addView(UiKit.sectionHeader(this, "Разделы"))
-        nav.addView(UiKit.button(this, "📖 Гайд по управлению") { open(GuideActivity::class.java) })
-        nav.addView(UiKit.button(this, "⚙️ Настройки под человека") { open(SettingsActivity::class.java) })
+        nav.addView(UiKit.iconButton(this, "📖  Гайд по управлению") { open(GuideActivity::class.java) })
+        nav.addView(UiKit.iconButton(this, "⚙️  Настройки под человека") { open(SettingsActivity::class.java) })
         col.addView(nav)
 
-        // Диагностика
         val diag = UiKit.card(this)
-        diag.addView(UiKit.sectionHeader(this, "Диагностика (удалить после тестов)"))
-        diag.addView(UiKit.button(this, "🎤 Тест микрофона") { open(TestActivity::class.java) })
-        diag.addView(UiKit.button(this, "📋 Логи") { open(LogActivity::class.java) })
+        diag.addView(UiKit.sectionHeader(this, "Диагностика"))
+        diag.addView(UiKit.iconButton(this, "🎤  Тест микрофона") { open(TestActivity::class.java) })
+        diag.addView(UiKit.iconButton(this, "📋  Логи") { open(LogActivity::class.java) })
         col.addView(diag)
 
-        // О приложении / разработчик
+        col.addView(buildDevBanner())
         col.addView(buildAbout())
 
         setContentView(ScrollView(this).apply {
@@ -68,19 +65,18 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER_HORIZONTAL
             setBackgroundResource(R.drawable.header_bg)
             val p = UiKit.dp(this@MainActivity, 22)
-            setPadding(p, UiKit.dp(this@MainActivity, 28), p, UiKit.dp(this@MainActivity, 26))
+            setPadding(p, UiKit.dp(this@MainActivity, 26), p, UiKit.dp(this@MainActivity, 24))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = UiKit.dp(this@MainActivity, 4) }
         }
         h.addView(ImageView(this).apply {
             setImageResource(R.drawable.ic_launcher_foreground)
-            val s = UiKit.dp(this@MainActivity, 96)
+            val s = UiKit.dp(this@MainActivity, 92)
             layoutParams = LinearLayout.LayoutParams(s, s)
         })
         h.addView(TextView(this).apply {
-            text = "ГолосРуки"; textSize = 30f; setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
+            text = "ГолосРуки"; textSize = 30f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
         })
         h.addView(TextView(this).apply {
             text = "Управление телефоном голосом"; textSize = 15f
@@ -99,16 +95,48 @@ class MainActivity : ComponentActivity() {
         return h
     }
 
+    private fun buildDevBanner(): LinearLayout {
+        val b = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.banner_bg)
+            val p = UiKit.dp(this@MainActivity, 18)
+            setPadding(p, p, p, p)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = UiKit.dp(this@MainActivity, 14) }
+            isClickable = true
+            setOnClickListener {
+                runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://donbassreklama.ru"))) }
+            }
+        }
+        b.addView(TextView(this).apply {
+            text = "Донбасс Реклама"; textSize = 22f; setTextColor(Color.WHITE)
+        })
+        b.addView(TextView(this).apply {
+            text = "Вывески • реклама • разработка приложений"
+            textSize = 14f; setTextColor(Color.parseColor("#FFF3E6"))
+            setPadding(0, UiKit.dp(this@MainActivity, 2), 0, UiKit.dp(this@MainActivity, 8))
+        })
+        b.addView(TextView(this).apply {
+            text = "  🌐  donbassreklama.ru  →  "
+            textSize = 14f; setTextColor(Color.parseColor("#B8692E"))
+            setBackgroundResource(R.drawable.badge_bg)
+            setBackgroundColor(Color.WHITE)
+            val pad = UiKit.dp(this@MainActivity, 8)
+            setPadding(pad * 2, pad, pad * 2, pad)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        })
+        return b
+    }
+
     private fun buildAbout(): LinearLayout {
         val card = UiKit.card(this)
         card.addView(UiKit.sectionHeader(this, "О приложении"))
-        card.addView(UiKit.body(this, "Версия 3.8 • офлайн-распознавание речи"))
-        card.addView(UiKit.body(this, "Разработчик: Донбасс Реклама"))
-        card.addView(UiKit.button(this, "🌐 donbassreklama.ru", R.drawable.btn_primary) {
-            runCatching {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://donbassreklama.ru")))
-            }
-        })
+        card.addView(UiKit.body(this, "ГолосРуки — голосовое управление смартфоном для людей с ограниченными возможностями."))
+        card.addView(UiKit.body(this, "Офлайн-распознавание речи, без интернета и без передачи данных."))
+        card.addView(UiKit.body(this, "Версия 3.9 • Разработчик: Донбасс Реклама"))
         return card
     }
 
@@ -119,6 +147,7 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.CALL_PHONE,
             Manifest.permission.ANSWER_PHONE_CALLS,
+            Manifest.permission.READ_CONTACTS,
             Manifest.permission.SEND_SMS,
             Manifest.permission.ACCESS_FINE_LOCATION
         )

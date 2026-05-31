@@ -30,6 +30,11 @@ object SettingsStore {
     fun getSwipeStrength(ctx: Context): Int = p(ctx).getInt("swipe_strength", 2)
     fun setSwipeStrength(ctx: Context, v: Int) = p(ctx).edit().putInt("swipe_strength", v).apply()
 
+    fun getVibrate(ctx: Context): Boolean = p(ctx).getBoolean("vibrate", true)
+    fun setVibrate(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("vibrate", v).apply()
+    fun getKeepScreen(ctx: Context): Boolean = p(ctx).getBoolean("keep_screen", true)
+    fun setKeepScreen(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("keep_screen", v).apply()
+
     /** Контакты: имя(дат. падеж) -> номер. */
     fun getContacts(ctx: Context): Map<String, String> {
         val raw = p(ctx).getString("contacts", null) ?: return emptyMap()

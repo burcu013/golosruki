@@ -32,6 +32,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var wakeWord = "иван"
     private var idleMs = 30_000L
     private var ignoreMedia = true
+    private var vibrateOnWake = true
+    private var keepScreen = true
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager }
 
     private enum class State { ASLEEP, AWAKE }
@@ -86,6 +88,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         wakeWord = SettingsStore.getWake(this)
         idleMs = SettingsStore.getIdle(this) * 1000L
         ignoreMedia = SettingsStore.getIgnoreMedia(this)
+        vibrateOnWake = SettingsStore.getVibrate(this)
+        keepScreen = SettingsStore.getKeepScreen(this)
         Logger.log("REC", "Старт службы. Слово активации: '$wakeWord', сон: ${idleMs / 1000}с")
 
         val notif = buildNotification("Запуск…")
@@ -96,6 +100,19 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     private fun cap(s: String) = s.replaceFirstChar { it.uppercase() }
+
+    private fun vibrateTick() {
+        try {
+            val v = if (Build.VERSION.SDK_INT >= 31) {
+                (getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as android.os.VibratorManager).defaultVibrator
+            } else {
+                @Suppress("DEPRECATION") (getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator)
+            }
+            if (Build.VERSION.SDK_INT >= 26)
+                v.vibrate(android.os.VibrationEffect.createOneShot(40, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+            else @Suppress("DEPRECATION") v.vibrate(40)
+        } catch (e: Exception) { /* без вибро */ }
+    }
 
     private fun stateText(): String = when {
         dictation -> "✍️ Диктовка — говорите текст, «готово» для выхода"
@@ -244,8 +261,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             state = State.AWAKE
             if (paused) { setPaused(false); Logger.log("REC", "Пауза снята") }
             resetIdle()
-            VoiceAccessibilityService.instance?.keepScreenOn(true)
+            if (keepScreen) VoiceAccessibilityService.instance?.keepScreenOn(true)
             val rest = if (isWake) stripWake(text) else stripResume(text)
+            if (vibrateOnWake && rest.isBlank()) vibrateTick()
             refreshNotification()
             if (rest.isBlank()) {
                 VoiceAccessibilityService.instance?.showStatus("${cap(wakeWord)} слушает")

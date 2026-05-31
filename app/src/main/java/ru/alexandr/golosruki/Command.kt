@@ -19,6 +19,8 @@ sealed class Command {
     object VolumeUp : Command()
     object VolumeDown : Command()
     object VolumeMute : Command()
+    object MediaPause : Command()             // пауза воспроизведения
+    object MediaPlay : Command()              // воспроизвести
     data class Swipe(val direction: Direction) : Command()
     object ShowNumbers : Command()
     object Grid : Command()                   // сетка 3×4 = 12 ячеек, двухуровневая
@@ -56,6 +58,8 @@ sealed class Command {
         VolumeUp -> "Громче"
         VolumeDown -> "Тише"
         VolumeMute -> "Без звука"
+        MediaPause -> "Пауза видео"
+        MediaPlay -> "Воспроизвести"
         is Swipe -> "Свайп " + direction.name.lowercase()
         ShowNumbers -> "Показываю номера"
         Grid -> "Сетка 12"

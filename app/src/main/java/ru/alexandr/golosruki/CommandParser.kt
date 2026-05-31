@@ -58,7 +58,7 @@ object CommandParser {
 
         // 1. Навигация и управление
         when {
-            t.contains("назад") -> return Command.Back
+            t.contains("назад") || t.contains("выход") -> return Command.Back
             t.contains("домой") || t.contains("главный экран") -> return Command.Home
             t.contains("недавн") || t.contains("переключатель") -> return Command.Recents
             t.contains("шторк") || t.contains("уведомлен") -> return Command.Notifications
@@ -78,10 +78,13 @@ object CommandParser {
             t.contains("удали") || t.contains("стереть") || t.contains("сотри") -> return Command.DeleteText
         }
 
-        // свайп конкретного элемента по номеру: «смахни 3 влево»
-        if (t.contains("смахни") || t.contains("свайпни") || t.contains("смахн")) {
+        // свайп конкретного элемента: «3 влево», «смахни 5 вправо» (число + направление в одной фразе)
+        run {
             val numI = extractNumber(t)
-            if (numI != null) return Command.SwipeItem(numI, dirOf(t) ?: Direction.LEFT)
+            val dir = dirOf(t)
+            if (numI != null && dir != null) return Command.SwipeItem(numI, dir)
+            if ((t.contains("смахни") || t.contains("свайпни") || t.contains("смахн")) && numI != null)
+                return Command.SwipeItem(numI, dir ?: Direction.LEFT)
         }
 
         // 2. Свайпы
@@ -105,6 +108,21 @@ object CommandParser {
         // 4. (Ввод текста выполняется в режиме диктовки — см. п.0.2)
 
         return Command.Unknown
+    }
+
+    /** Разрешённые команды во время воспроизведения медиа (после слова активации). */
+    fun parseMedia(raw: String): Command? {
+        val t = raw.lowercase()
+        return when {
+            t.contains("громче") -> Command.VolumeUp
+            t.contains("тише") -> Command.VolumeDown
+            t.contains("без звука") || t.contains("выключи звук") -> Command.VolumeMute
+            t.contains("пауза") || t.contains("останови") || t.contains("стоп") -> Command.MediaPause
+            t.contains("воспроизв") || t.contains("играй") || t.contains("плей") || t.contains("продолж") -> Command.MediaPlay
+            t.contains("назад") || t.contains("выход") || t.contains("закрой") -> Command.Back
+            t.contains("домой") -> Command.Home
+            else -> null
+        }
     }
 
     private fun dirOf(t: String): Direction? = when {

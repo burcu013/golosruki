@@ -80,6 +80,8 @@ class VoiceAccessibilityService : AccessibilityService() {
             Command.VolumeUp -> volume(android.media.AudioManager.ADJUST_RAISE)
             Command.VolumeDown -> volume(android.media.AudioManager.ADJUST_LOWER)
             Command.VolumeMute -> volume(android.media.AudioManager.ADJUST_MUTE)
+            Command.MediaPause -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
+            Command.MediaPlay -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PLAY)
             is Command.Swipe -> doScroll(command.direction)
             Command.ShowNumbers -> showNumbers()
             Command.Grid -> showGrid()
@@ -519,6 +521,15 @@ class VoiceAccessibilityService : AccessibilityService() {
             val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
             am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, adjust, android.media.AudioManager.FLAG_SHOW_UI)
         } catch (e: Exception) { Logger.log("ACC", "Громкость: ${e.message}") }
+    }
+
+    private fun mediaKey(code: Int) {
+        try {
+            val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+            am.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, code))
+            am.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, code))
+            Logger.log("ACC", "Медиа-клавиша $code")
+        } catch (e: Exception) { Logger.log("ACC", "Медиа: ${e.message}") }
     }
 
     // --- Пробуждение / разблокировка ---

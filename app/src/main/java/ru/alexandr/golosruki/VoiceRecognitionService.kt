@@ -31,6 +31,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     private var wakeWord = "иван"
     private var idleMs = 30_000L
+    private var ignoreMedia = true
+    private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager }
 
     private enum class State { ASLEEP, AWAKE }
     @Volatile private var state = State.ASLEEP
@@ -82,6 +84,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         personal = PersonalConfig.load(this)
         wakeWord = SettingsStore.getWake(this)
         idleMs = SettingsStore.getIdle(this) * 1000L
+        ignoreMedia = SettingsStore.getIgnoreMedia(this)
         Logger.log("REC", "Старт службы. Слово активации: '$wakeWord', сон: ${idleMs / 1000}с")
 
         val notif = buildNotification("Запуск…")
@@ -195,6 +198,26 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         val raw = hypothesis?.let { JSONObject(it).optString("text") } ?: return
         val text = raw.replace("[unk]", " ").trim()
         if (text.isBlank()) return
+
+        // Во время видео/музыки: работает только «слово активации + команда потока»
+        if (ignoreMedia && audioManager.isMusicActive()) {
+            if (text.contains(wakeWord)) {
+                val rest = stripWake(text)
+                val c = CommandParser.parseMedia(rest)
+                if (c != null) {
+                    Logger.log("MEDIA", "Команда при медиа: ${c.label()}")
+                    post { VoiceAccessibilityService.instance?.execute(c) }
+                } else {
+                    VoiceAccessibilityService.instance?.showStatus(
+                        "При медиа: ${cap(wakeWord)} + пауза/играй/громче/тише/назад"
+                    )
+                }
+            } else {
+                Logger.log("REC", "Игнор (играет медиа): '$text'")
+            }
+            return
+        }
+
         Logger.log("REC", "Распознано: '$text' (state=$state, paused=$paused, dict=$dictation)")
 
         if (dictation) {

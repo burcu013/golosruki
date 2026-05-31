@@ -17,6 +17,7 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var idle: EditText
     private lateinit var sosNum: EditText
     private lateinit var sosTxt: EditText
+    private lateinit var ignoreMediaCheck: android.widget.CheckBox
     private val nameFields = mutableListOf<EditText>()
     private val numberFields = mutableListOf<EditText>()
     private val openPhraseFields = mutableListOf<EditText>()
@@ -37,6 +38,12 @@ class SettingsActivity : ComponentActivity() {
         a.addView(UiKit.body(this, "Сон через (секунд тишины):"))
         idle = field(InputType.TYPE_CLASS_NUMBER).also { it.setText(SettingsStore.getIdle(this).toString()) }
         a.addView(idle)
+        ignoreMediaCheck = android.widget.CheckBox(this).apply {
+            text = "Не реагировать во время видео/музыки"
+            textSize = 15f
+            isChecked = SettingsStore.getIgnoreMedia(this@SettingsActivity)
+        }
+        a.addView(ignoreMediaCheck)
         col.addView(a)
 
         val s = UiKit.card(this)
@@ -134,6 +141,7 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setIdle(this, idle.text.toString().toIntOrNull()?.coerceIn(10, 300) ?: 30)
         SettingsStore.setSosNumber(this, sosNum.text.toString())
         SettingsStore.setSosText(this, sosTxt.text.toString())
+        SettingsStore.setIgnoreMedia(this, ignoreMediaCheck.isChecked)
 
         val contacts = mutableMapOf<String, String>()
         for (i in nameFields.indices) {

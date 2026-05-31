@@ -35,9 +35,19 @@ class OverlayView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (gridMode) for (t in targets) canvas.drawRect(t.rect, gridLine)
+        // Координаты целей — физические (экранные). Сдвигаем рисование на положение окна,
+        // чтобы бейдж совпадал с точкой, куда реально уходит жест/клик.
+        val loc = IntArray(2); getLocationOnScreen(loc)
+        val ox = loc[0].toFloat(); val oy = loc[1].toFloat()
+
+        if (gridMode) for (t in targets) {
+            canvas.drawRect(
+                t.rect.left - ox, t.rect.top - oy,
+                t.rect.right - ox, t.rect.bottom - oy, gridLine
+            )
+        }
         for (t in targets) {
-            val cx = t.rect.centerX().toFloat(); val cy = t.rect.centerY().toFloat()
+            val cx = t.rect.centerX() - ox; val cy = t.rect.centerY() - oy
             canvas.drawCircle(cx, cy, 34f, badgeBg)
             val ty = cy - (badgeText.descent() + badgeText.ascent()) / 2
             canvas.drawText(t.number.toString(), cx, ty, badgeText)

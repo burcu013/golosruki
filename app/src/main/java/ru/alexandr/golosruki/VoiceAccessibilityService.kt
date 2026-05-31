@@ -70,6 +70,12 @@ class VoiceAccessibilityService : AccessibilityService() {
             Command.Screenshot -> if (Build.VERSION.SDK_INT >= 28) performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT)
             Command.Unlock -> doUnlock()
             Command.Sos -> doSos()
+            Command.AnswerCall -> answerCall()
+            Command.RejectCall -> endCall()
+            Command.SilenceRinger -> silenceRinger()
+            Command.VolumeUp -> volume(android.media.AudioManager.ADJUST_RAISE)
+            Command.VolumeDown -> volume(android.media.AudioManager.ADJUST_LOWER)
+            Command.VolumeMute -> volume(android.media.AudioManager.ADJUST_MUTE)
             is Command.Swipe -> doScroll(command.direction)
             Command.ShowNumbers -> showNumbers()
             Command.Grid -> showGrid()
@@ -221,12 +227,12 @@ class VoiceAccessibilityService : AccessibilityService() {
             }
             Mode.GRID2 -> {
                 val cell = targets[number] ?: run { showStatus("Нет ячейки $number"); return }
-                tapSmart(cell, kind)   // прилипаем к кнопке внутри ячейки
+                tapAt(cell.exactCenterX(), cell.exactCenterY(), kind)
                 resetOverlay()
             }
             else -> {  // NUMBERS или NONE
                 val r = targets[number] ?: run { showStatus("Нет цели $number"); return }
-                doTap(r.exactCenterX(), r.exactCenterY(), kind)
+                tapAt(r.exactCenterX(), r.exactCenterY(), kind)
                 resetOverlay()
             }
         }
@@ -234,35 +240,39 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     private fun resetOverlay() { mode = Mode.NONE; targets.clear(); overlay.clearTargets() }
 
-    /** Нажатие с «прилипанием» к ближайшей кнопке внутри области. */
-    private fun tapSmart(cell: Rect, kind: TapKind) {
-        val node = findClickableIn(rootInActiveWindow, cell)
-        if (node != null) {
-            val r = Rect(); node.getBoundsInScreen(r)
-            doTap(r.exactCenterX(), r.exactCenterY(), kind)
-        } else {
-            doTap(cell.exactCenterX(), cell.exactCenterY(), kind)
+    /** Нажатие в точке: сначала прямой клик по элементу (надёжно, без «долгого нажатия»),
+     *  иначе — жест по координатам. */
+    private fun tapAt(x: Float, y: Float, kind: TapKind) {
+        if (kind != TapKind.DOUBLE) {
+            val node = clickableNodeAt(x.toInt(), y.toInt())
+            if (node != null) {
+                val action = if (kind == TapKind.LONG)
+                    AccessibilityNodeInfo.ACTION_LONG_CLICK
+                else AccessibilityNodeInfo.ACTION_CLICK
+                if (node.performAction(action)) { Logger.log("ACC", "Клик по элементу"); return }
+            }
         }
+        doTap(x, y, kind)   // запасной — жест по координатам
     }
 
-    private fun findClickableIn(root: AccessibilityNodeInfo?, cell: Rect): AccessibilityNodeInfo? {
-        if (root == null) return null
-        var best: AccessibilityNodeInfo? = null
-        var bestDist = Int.MAX_VALUE
-        val cxC = cell.centerX(); val cyC = cell.centerY()
+    /** Самый маленький (самый точный) кликабельный элемент, содержащий точку. */
+    private fun clickableNodeAt(x: Int, y: Int): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        var result: AccessibilityNodeInfo? = null
+        var smallest = Long.MAX_VALUE
         fun walk(n: AccessibilityNodeInfo?) {
             if (n == null) return
-            if (n.isVisibleToUser && (n.isClickable || n.isLongClickable || n.isCheckable)) {
+            if (n.isVisibleToUser) {
                 val r = Rect(); n.getBoundsInScreen(r)
-                if (Rect.intersects(r, cell)) {
-                    val d = Math.abs(r.centerX() - cxC) + Math.abs(r.centerY() - cyC)
-                    if (d < bestDist) { bestDist = d; best = n }
+                if (r.contains(x, y) && (n.isClickable || n.isLongClickable)) {
+                    val area = r.width().toLong() * r.height()
+                    if (area < smallest) { smallest = area; result = n }
                 }
             }
             for (i in 0 until n.childCount) walk(n.getChild(i))
         }
         walk(root)
-        return best
+        return result
     }
 
     private fun doTap(x: Float, y: Float, kind: TapKind) {
@@ -299,8 +309,14 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     fun typeText(text: String) {
         val node = focusedEditable() ?: run { showStatus("Нет поля ввода"); return }
-        val existing = node.text?.toString() ?: ""
-        val newText = if (existing.isEmpty()) text else "$existing $text"
+        // Пустое поле может отдавать свой хинт («Поле поиска») как текст — игнорируем его
+        var existing = node.text?.toString() ?: ""
+        if (Build.VERSION.SDK_INT >= 26) {
+            if (node.isShowingHintText) existing = ""
+            val hint = node.hintText?.toString()
+            if (hint != null && existing == hint) existing = ""
+        }
+        val newText = if (existing.isBlank()) text else "$existing $text"
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
         }
@@ -375,6 +391,49 @@ class VoiceAccessibilityService : AccessibilityService() {
             lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
                 ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
         } catch (e: SecurityException) { null }
+    }
+
+    // --- Управление звонком и звуком ---
+    private fun answerCall() {
+        try {
+            val tm = getSystemService(TELECOM_SERVICE) as android.telecom.TelecomManager
+            if (Build.VERSION.SDK_INT >= 26) { tm.acceptRingingCall(); Logger.log("ACC", "Ответ на звонок") }
+        } catch (e: Exception) {
+            Logger.log("ACC", "Ответ не удался: ${e.message}")
+            showStatus("Нужно разрешение «Звонки» (ANSWER_PHONE_CALLS)")
+        }
+    }
+
+    private fun endCall() {
+        try {
+            val tm = getSystemService(TELECOM_SERVICE) as android.telecom.TelecomManager
+            if (Build.VERSION.SDK_INT >= 28) { tm.endCall(); Logger.log("ACC", "Сброс звонка") }
+            else showStatus("Сброс доступен на Android 9+")
+        } catch (e: Exception) {
+            Logger.log("ACC", "Сброс не удался: ${e.message}")
+            showStatus("Нужно разрешение «Звонки»")
+        }
+    }
+
+    private fun silenceRinger() {
+        // Сначала пробуем TelecomManager, иначе глушим поток звонка
+        try {
+            val tm = getSystemService(TELECOM_SERVICE) as android.telecom.TelecomManager
+            tm.silenceRinger(); Logger.log("ACC", "Звонок заглушён"); return
+        } catch (e: Exception) {
+            Logger.log("ACC", "silenceRinger недоступен: ${e.message}")
+        }
+        try {
+            val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+            am.adjustStreamVolume(android.media.AudioManager.STREAM_RING, android.media.AudioManager.ADJUST_MUTE, 0)
+        } catch (e: Exception) { showStatus("Не удалось заглушить (нужен доступ к режиму «Не беспокоить»)") }
+    }
+
+    private fun volume(adjust: Int) {
+        try {
+            val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+            am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, adjust, android.media.AudioManager.FLAG_SHOW_UI)
+        } catch (e: Exception) { Logger.log("ACC", "Громкость: ${e.message}") }
     }
 
     // --- Пробуждение / разблокировка ---

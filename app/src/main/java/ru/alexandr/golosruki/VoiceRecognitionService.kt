@@ -45,6 +45,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     companion object {
         const val CHANNEL_ID = "golosruki_voice"
         const val NOTIF_ID = 1
+        const val ACTION_RESET = "ru.alexandr.golosruki.RESET"
         @Volatile var instance: VoiceRecognitionService? = null
         @Volatile private var paused = false
         fun setPaused(p: Boolean) {
@@ -54,6 +55,23 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_RESET) resetState()
+        return START_STICKY
+    }
+
+    /** Полный сброс: снять паузу/диктовку, разбудить, перезапустить распознавание. */
+    fun resetState() {
+        Logger.log("REC", "СБРОС (перезапуск Ивана)")
+        dictation = false
+        setPaused(false)
+        state = State.AWAKE
+        if (model != null) restart(grammar = true)
+        resetIdle()
+        refreshNotification()
+        VoiceAccessibilityService.instance?.showStatus("${cap(wakeWord)} перезапущен")
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -91,12 +109,27 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             this, 0, tap,
             android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
         )
+        val resetIntent = Intent(this, VoiceRecognitionService::class.java).setAction(ACTION_RESET)
+        val resetPi = if (Build.VERSION.SDK_INT >= 26)
+            android.app.PendingIntent.getForegroundService(
+                this, 1, resetIntent,
+                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            )
+        else android.app.PendingIntent.getService(
+            this, 1, resetIntent,
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        @Suppress("DEPRECATION")
+        val resetAction = Notification.Action.Builder(
+            android.R.drawable.ic_menu_rotate, "Перезапустить Иван", resetPi
+        ).build()
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("ГолосРуки")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .setContentIntent(pi)
+            .addAction(resetAction)
             .build()
     }
 
@@ -163,7 +196,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         Logger.log("REC", "Распознано: '$text' (state=$state, paused=$paused, dict=$dictation)")
 
         if (dictation) {
-            if (text.contains("готово") || text.contains("конец")) { exitDictation(); return }
+            // Гарантированный выход: слово активации, «стоп», «отмена», «готово», «конец»
+            if (text.contains(wakeWord) || text.contains("стоп") || text.contains("отмена") ||
+                text.contains("готово") || text.contains("конец")) {
+                exitDictation(); return
+            }
             resetIdle()
             post { VoiceAccessibilityService.instance?.typeText(text) }
             return
@@ -192,7 +229,18 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handleCommand(text)
     }
 
+    private var lastCmdText: String? = null
+
     private fun handleCommand(text: String) {
+        if (text.contains("повтори")) {
+            lastCmdText?.let { last ->
+                Logger.log("CMD", "Повтор: $last")
+                val cmd = CommandParser.parse(last, personal)
+                post { VoiceAccessibilityService.instance?.execute(cmd) }
+            }
+            return
+        }
+        lastCmdText = text
         val cmd = CommandParser.parse(text, personal)
         Logger.log("CMD", "Команда: ${cmd.label()}")
         post { VoiceAccessibilityService.instance?.execute(cmd) }

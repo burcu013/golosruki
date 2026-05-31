@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         })
         setup.addView(UiKit.button(this, "3. Запустить голосовое управление", R.drawable.btn_amber) { startVoice() })
+        setup.addView(UiKit.button(this, "🔁 Перезапустить Иван (сброс)") { resetVoice() })
         col.addView(setup)
 
         // Разделы
@@ -55,6 +56,7 @@ class MainActivity : ComponentActivity() {
         val perms = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.CALL_PHONE,
+            Manifest.permission.ANSWER_PHONE_CALLS,
             Manifest.permission.SEND_SMS,
             Manifest.permission.ACCESS_FINE_LOCATION
         )
@@ -64,6 +66,11 @@ class MainActivity : ComponentActivity() {
 
     private fun startVoice() {
         val intent = Intent(this, VoiceRecognitionService::class.java)
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+    }
+
+    private fun resetVoice() {
+        val intent = Intent(this, VoiceRecognitionService::class.java).setAction(VoiceRecognitionService.ACTION_RESET)
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
     }
 }

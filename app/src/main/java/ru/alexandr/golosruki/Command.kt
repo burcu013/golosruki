@@ -13,6 +13,12 @@ sealed class Command {
     object Screenshot : Command()
     object Unlock : Command()                 // «Иван привет» — разблокировка/пробуждение
     object Sos : Command()                    // звонок + СМС с геолокацией
+    object AnswerCall : Command()             // ответить на входящий
+    object RejectCall : Command()             // отклонить / завершить
+    object SilenceRinger : Command()          // беззвучно (заглушить звонок)
+    object VolumeUp : Command()
+    object VolumeDown : Command()
+    object VolumeMute : Command()
     data class Swipe(val direction: Direction) : Command()
     object ShowNumbers : Command()
     object Grid : Command()                   // сетка 3×4 = 12 ячеек, двухуровневая
@@ -41,6 +47,12 @@ sealed class Command {
         Screenshot -> "Скриншот"
         Unlock -> "Разблокировка"
         Sos -> "SOS! Вызов помощи"
+        AnswerCall -> "Ответ на звонок"
+        RejectCall -> "Сброс звонка"
+        SilenceRinger -> "Звонок беззвучно"
+        VolumeUp -> "Громче"
+        VolumeDown -> "Тише"
+        VolumeMute -> "Без звука"
         is Swipe -> "Свайп " + direction.name.lowercase()
         ShowNumbers -> "Показываю номера"
         Grid -> "Сетка 12"

@@ -37,6 +37,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private enum class State { ASLEEP, AWAKE }
     @Volatile private var state = State.ASLEEP
     @Volatile private var dictation = false
+    @Volatile private var dictationDigits = false
 
     private val idleRunnable = Runnable {
         state = State.ASLEEP
@@ -175,15 +176,19 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.postDelayed({ startListening(grammar) }, 200)
     }
 
-    fun enterDictation() {
+    fun enterDictation(digits: Boolean = false) {
         dictation = true
-        VoiceAccessibilityService.instance?.showStatus("Диктовка: говорите текст, «готово» — выход")
+        dictationDigits = digits
+        val hint = if (digits) "Диктовка цифрами: говорите номер, «готово» — выход"
+        else "Диктовка: говорите текст, «готово» — выход"
+        VoiceAccessibilityService.instance?.showStatus(hint)
         restart(grammar = false)
         resetIdle(); refreshNotification()
     }
 
     private fun exitDictation() {
         dictation = false
+        dictationDigits = false
         VoiceAccessibilityService.instance?.showStatus("Команды активны")
         restart(grammar = true)
         resetIdle(); refreshNotification()
@@ -227,7 +232,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 exitDictation(); return
             }
             resetIdle()
-            post { VoiceAccessibilityService.instance?.typeText(text) }
+            val out = if (dictationDigits) NumberWords.toDigits(text) else text
+            if (out.isNotBlank()) post { VoiceAccessibilityService.instance?.typeText(out) }
             return
         }
 

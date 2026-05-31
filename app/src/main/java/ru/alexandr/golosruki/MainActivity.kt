@@ -102,7 +102,7 @@ class MainActivity : ComponentActivity() {
     private fun buildAbout(): LinearLayout {
         val card = UiKit.card(this)
         card.addView(UiKit.sectionHeader(this, "О приложении"))
-        card.addView(UiKit.body(this, "Версия 3.6 • офлайн-распознавание речи"))
+        card.addView(UiKit.body(this, "Версия 3.8 • офлайн-распознавание речи"))
         card.addView(UiKit.body(this, "Разработчик: Донбасс Реклама"))
         card.addView(UiKit.button(this, "🌐 donbassreklama.ru", R.drawable.btn_primary) {
             runCatching {

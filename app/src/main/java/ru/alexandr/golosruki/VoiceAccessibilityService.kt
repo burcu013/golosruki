@@ -96,6 +96,10 @@ class VoiceAccessibilityService : AccessibilityService() {
             Command.EnterKey -> pressEnter()
             is Command.SwipeItem -> swipeItem(command.number, command.direction)
             Command.Dictation -> VoiceRecognitionService.instance?.enterDictation()
+            Command.DictationDigits -> VoiceRecognitionService.instance?.enterDictation(true)
+            is Command.Drag -> drag(command.from, command.to)
+            is Command.ScrollEdge -> scrollEdge(command.direction)
+            Command.Paste -> paste()
             is Command.CallContact -> doCall(command.number)
             is Command.OpenApp -> openApp(command.pkg)
             Command.Help -> overlay.showHelp()
@@ -120,49 +124,34 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     // --- Скролл: сначала пробуем прокрутить нужный контейнер, иначе жест по центру ---
     private fun doScroll(direction: Direction) {
-        if (direction == Direction.UP || direction == Direction.DOWN) {
-            val node = findScrollable(rootInActiveWindow)
-            if (node != null) {
-                val action = if (direction == Direction.DOWN)
-                    AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-                if (node.performAction(action)) { Logger.log("ACC", "Скролл узла"); return }
-            }
-        }
         gestureScroll(direction)
-    }
-
-    private fun findScrollable(root: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
-        if (root == null) return null
-        var best: AccessibilityNodeInfo? = null
-        var bestArea = 0L
-        fun walk(n: AccessibilityNodeInfo?) {
-            if (n == null) return
-            if (n.isScrollable && n.isVisibleToUser) {
-                val r = Rect(); n.getBoundsInScreen(r)
-                val area = r.width().toLong() * r.height()
-                if (area > bestArea) { bestArea = area; best = n }
-            }
-            for (i in 0 until n.childCount) walk(n.getChild(i))
-        }
-        walk(root)
-        return best
     }
 
     private fun gestureScroll(direction: Direction) {
         val (w, h) = screenSize()
         val cx = w / 2f; val cy = h / 2f
-        // держим палец в центральной зоне, подальше от хедера и краёв (анти-back)
-        val topY = h * 0.32f; val botY = h * 0.68f
-        val leftX = w * 0.30f; val rightX = w * 0.70f
+
+        // калибровка
+        val invV = SettingsStore.getSwipeInvertV(this)
+        val invH = SettingsStore.getSwipeInvertH(this)
+        val frac = when (SettingsStore.getSwipeStrength(this)) { 1 -> 0.20f; 3 -> 0.42f; else -> 0.30f }
+        val dy = h * frac; val dx = w * frac
+
+        var dir = direction
+        if ((dir == Direction.UP || dir == Direction.DOWN) && invV)
+            dir = if (dir == Direction.UP) Direction.DOWN else Direction.UP
+        if ((dir == Direction.LEFT || dir == Direction.RIGHT) && invH)
+            dir = if (dir == Direction.LEFT) Direction.RIGHT else Direction.LEFT
+
         val path = Path()
-        when (direction) {
-            Direction.DOWN  -> { path.moveTo(cx, botY); path.lineTo(cx, topY) }
-            Direction.UP    -> { path.moveTo(cx, topY); path.lineTo(cx, botY) }
-            Direction.LEFT  -> { path.moveTo(rightX, cy); path.lineTo(leftX, cy) }
-            Direction.RIGHT -> { path.moveTo(leftX, cy); path.lineTo(rightX, cy) }
+        when (dir) {
+            // палец движется в ту же сторону, что и команда
+            Direction.DOWN  -> { path.moveTo(cx, cy - dy); path.lineTo(cx, cy + dy) }
+            Direction.UP    -> { path.moveTo(cx, cy + dy); path.lineTo(cx, cy - dy) }
+            Direction.LEFT  -> { path.moveTo(cx + dx, cy); path.lineTo(cx - dx, cy) }
+            Direction.RIGHT -> { path.moveTo(cx - dx, cy); path.lineTo(cx + dx, cy) }
         }
-        gesture(path, 320)
+        gesture(path, 200)
     }
 
     // --- Номера на кликабельных элементах ---
@@ -355,6 +344,52 @@ class VoiceAccessibilityService : AccessibilityService() {
                 .addStroke(GestureDescription.StrokeDescription(path, 0, duration))
                 .build(), null, null
         )
+    }
+
+    // --- Перетаскивание: зажать элемент N и перенести на M ---
+    private fun drag(fromN: Int, toN: Int) {
+        val a = targets[fromN] ?: run { showStatus("Нет цели $fromN"); return }
+        val b = targets[toN] ?: run { showStatus("Нет цели $toN"); return }
+        val sx = a.exactCenterX(); val sy = a.exactCenterY()
+        val ex = b.exactCenterX(); val ey = b.exactCenterY()
+        if (Build.VERSION.SDK_INT >= 26) {
+            // 1) удержание (имитация долгого нажатия — «зажать/зафиксировать»)
+            val hold = Path().apply { moveTo(sx, sy) }
+            val s1 = GestureDescription.StrokeDescription(hold, 0, 500, true)
+            dispatchGesture(
+                GestureDescription.Builder().addStroke(s1).build(),
+                object : AccessibilityService.GestureResultCallback() {
+                    override fun onCompleted(d: GestureDescription?) {
+                        // 2) перенос (продолжение того же касания)
+                        val move = Path().apply { moveTo(sx, sy); lineTo(ex, ey) }
+                        val s2 = s1.continueStroke(move, 0, 600, false)
+                        dispatchGesture(GestureDescription.Builder().addStroke(s2).build(), null, null)
+                    }
+                }, null
+            )
+        } else {
+            // запасной: один медленный штрих
+            val p = Path().apply { moveTo(sx, sy); lineTo(ex, ey) }
+            gesture(p, 1200)
+        }
+        Logger.log("ACC", "Перетаскивание $fromN→$toN")
+        resetOverlay()
+    }
+
+    // --- Листать до конца (несколько свайпов подряд) ---
+    private fun scrollEdge(direction: Direction) {
+        var i = 0
+        fun step() {
+            if (i++ >= 8) return
+            gestureScroll(direction)
+            handler.postDelayed({ step() }, 260)
+        }
+        step()
+    }
+
+    private fun paste() {
+        val node = focusedEditable() ?: run { showStatus("Нет поля ввода"); return }
+        node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
     }
 
     // --- Ввод текста ---

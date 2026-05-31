@@ -35,6 +35,10 @@ sealed class Command {
     object EnterKey : Command()
     data class SwipeItem(val number: Int, val direction: Direction) : Command()  // свайп элемента по номеру
     object Dictation : Command()              // режим диктовки (свободный текст)
+    object DictationDigits : Command()        // диктовка цифрами (телефон)
+    data class Drag(val from: Int, val to: Int) : Command()   // перетащить элемент N на M
+    data class ScrollEdge(val direction: Direction) : Command() // листать до конца
+    object Paste : Command()                  // вставить из буфера
     data class CallContact(val name: String, val number: String) : Command()
     data class OpenApp(val name: String, val pkg: String) : Command()
     object Help : Command()
@@ -74,6 +78,10 @@ sealed class Command {
         EnterKey -> "Ввод (Enter)"
         is SwipeItem -> "Свайп $number ${direction.name.lowercase()}"
         Dictation -> "Диктовка"
+        DictationDigits -> "Диктовка цифрами"
+        is Drag -> "Перетащить $from → $to"
+        is ScrollEdge -> "До конца ${direction.name.lowercase()}"
+        Paste -> "Вставить"
         is CallContact -> "Звоню: $name"
         is OpenApp -> "Открываю: $name"
         Help -> "Помощь"

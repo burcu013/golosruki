@@ -18,6 +18,9 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var sosNum: EditText
     private lateinit var sosTxt: EditText
     private lateinit var ignoreMediaCheck: android.widget.CheckBox
+    private lateinit var invVCheck: android.widget.CheckBox
+    private lateinit var invHCheck: android.widget.CheckBox
+    private lateinit var strengthField: EditText
     private val nameFields = mutableListOf<EditText>()
     private val numberFields = mutableListOf<EditText>()
     private val openPhraseFields = mutableListOf<EditText>()
@@ -45,6 +48,25 @@ class SettingsActivity : ComponentActivity() {
         }
         a.addView(ignoreMediaCheck)
         col.addView(a)
+
+        // Калибровка свайпов
+        val cal = UiKit.card(this)
+        cal.addView(UiKit.sectionHeader(this, "Калибровка свайпов"))
+        cal.addView(UiKit.body(this, "Свайп = жест пальцем. Если направление непривычно (или планшет повёрнут) — поменяйте местами."))
+        invVCheck = android.widget.CheckBox(this).apply {
+            text = "Поменять местами верх/вниз"; textSize = 15f
+            isChecked = SettingsStore.getSwipeInvertV(this@SettingsActivity)
+        }
+        cal.addView(invVCheck)
+        invHCheck = android.widget.CheckBox(this).apply {
+            text = "Поменять местами влево/вправо"; textSize = 15f
+            isChecked = SettingsStore.getSwipeInvertH(this@SettingsActivity)
+        }
+        cal.addView(invHCheck)
+        cal.addView(UiKit.body(this, "Сила свайпа (1 короткий – 3 длинный):"))
+        strengthField = field(InputType.TYPE_CLASS_NUMBER).also { it.setText(SettingsStore.getSwipeStrength(this).toString()) }
+        cal.addView(strengthField)
+        col.addView(cal)
 
         val s = UiKit.card(this)
         s.addView(UiKit.sectionHeader(this, "SOS"))
@@ -142,6 +164,9 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setSosNumber(this, sosNum.text.toString())
         SettingsStore.setSosText(this, sosTxt.text.toString())
         SettingsStore.setIgnoreMedia(this, ignoreMediaCheck.isChecked)
+        SettingsStore.setSwipeInvertV(this, invVCheck.isChecked)
+        SettingsStore.setSwipeInvertH(this, invHCheck.isChecked)
+        SettingsStore.setSwipeStrength(this, strengthField.text.toString().toIntOrNull()?.coerceIn(1, 3) ?: 2)
 
         val contacts = mutableMapOf<String, String>()
         for (i in nameFields.indices) {

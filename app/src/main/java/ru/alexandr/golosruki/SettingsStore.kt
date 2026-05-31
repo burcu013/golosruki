@@ -23,6 +23,13 @@ object SettingsStore {
     fun getIgnoreMedia(ctx: Context): Boolean = p(ctx).getBoolean("ignore_media", true)
     fun setIgnoreMedia(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("ignore_media", v).apply()
 
+    fun getSwipeInvertV(ctx: Context): Boolean = p(ctx).getBoolean("swipe_inv_v", false)
+    fun setSwipeInvertV(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("swipe_inv_v", v).apply()
+    fun getSwipeInvertH(ctx: Context): Boolean = p(ctx).getBoolean("swipe_inv_h", false)
+    fun setSwipeInvertH(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("swipe_inv_h", v).apply()
+    fun getSwipeStrength(ctx: Context): Int = p(ctx).getInt("swipe_strength", 2)
+    fun setSwipeStrength(ctx: Context, v: Int) = p(ctx).edit().putInt("swipe_strength", v).apply()
+
     /** Контакты: имя(дат. падеж) -> номер. */
     fun getContacts(ctx: Context): Map<String, String> {
         val raw = p(ctx).getString("contacts", null) ?: return emptyMap()

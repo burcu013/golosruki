@@ -34,6 +34,7 @@ object CommandParser {
         if (t.contains("тише")) return Command.VolumeDown
 
         // 0.2 Диктовка / ввод текста — только через свободный распознаватель
+        if (t.contains("цифр") || t.contains("номер телефона")) return Command.DictationDigits
         if (t.contains("диктовка") || t.contains("печатать") ||
             t.contains("напиши") || t.contains("введи") || t.contains("набрать текст"))
             return Command.Dictation
@@ -66,16 +67,35 @@ object CommandParser {
             t.contains("заблокир") || t == "блокировка" -> return Command.Lock
             t.contains("скриншот") || t.contains("снимок экрана") -> return Command.Screenshot
             t.contains("помощь") || t.contains("команды") -> return Command.Help
-            t.contains("стоп") || t.contains("хватит") || t.contains("пауза") -> return Command.Pause
+            t.contains("молчи") || t.contains("замолчи") || t.contains("замри") -> return Command.Pause
+            t.contains("пауза") || t.contains("останови") || t.contains("стоп") || t.contains("хватит") -> return Command.MediaPause
+            t.contains("воспроизв") || t.contains("играй") || t.contains("плей") -> return Command.MediaPlay
             t.contains("слушай") || t.contains("продолжи") -> return Command.Resume
             t.contains("скрой") || t.contains("убери") || t.contains("спрячь") || t.contains("отмена") -> return Command.HideOverlay
             t.contains("номера") || t.contains("кнопки") -> return Command.ShowNumbers
             t.contains("сетк") -> return Command.Grid
             t.contains("ввод") || t.contains("отправ") || t.contains("энтер") -> return Command.EnterKey
+            t.contains("вставь") || t.contains("вставить") -> return Command.Paste
             t.contains("выдел") -> return Command.SelectAll
             t.contains("очист") -> return Command.ClearText
             (t.contains("удали") || t.contains("стер") || t.contains("сотри")) && t.contains("всё") -> return Command.ClearText
             t.contains("удали") || t.contains("стереть") || t.contains("сотри") -> return Command.DeleteText
+        }
+
+        // перетаскивание: «перетащи 3 на 7», «потяни 2 к 5»
+        if (t.contains("перетащи") || t.contains("потяни") || t.contains("перенеси") || t.contains("перетянуть")) {
+            val nums = NumberWords.allNumbers(t)
+            if (nums.size >= 2) return Command.Drag(nums[0], nums[1])
+        }
+
+        // листать до конца: «в самый низ», «вниз до конца», «в начало»
+        if (t.contains("до конца") || t.contains("самый") || t.contains("в конец") || t.contains("в начало")) {
+            val dir = when {
+                t.contains("низ") || t.contains("вниз") || t.contains("конец") -> Direction.DOWN
+                t.contains("верх") || t.contains("вверх") || t.contains("начал") || t.contains("наверх") -> Direction.UP
+                else -> null
+            }
+            if (dir != null) return Command.ScrollEdge(dir)
         }
 
         // свайп конкретного элемента: «3 влево», «смахни 5 вправо» (число + направление в одной фразе)

@@ -83,6 +83,42 @@ object UiKit {
         setPadding(0, dp(ctx, 2), 0, dp(ctx, 2))
     }
 
+    /** Мелкая подсказка/предупреждение приглушённым цветом. */
+    fun hint(ctx: Context, text: String): TextView = TextView(ctx).apply {
+        this.text = text
+        textSize = 13f
+        setTextColor(Color.parseColor("#8A7320"))
+        setBackgroundColor(Color.parseColor("#FFF6DA"))
+        val p = dp(ctx, 8)
+        setPadding(p, p, p, p)
+        val lp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(ctx, 6); bottomMargin = dp(ctx, 4) }
+        layoutParams = lp
+    }
+
+    /** Строка гайда: команда жирно/цветом, описание после «—» обычным. */
+    fun cmdLine(ctx: Context, line: String): TextView = TextView(ctx).apply {
+        textSize = 15f
+        setPadding(dp(ctx, 4), dp(ctx, 5), 0, dp(ctx, 5))
+        val sep = line.indexOf(" — ")
+        if (sep > 0) {
+            val cmd = line.substring(0, sep)
+            val desc = line.substring(sep)
+            val sb = android.text.SpannableStringBuilder("▸ $cmd$desc")
+            val end = 2 + cmd.length
+            sb.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, end, 0)
+            sb.setSpan(android.text.style.ForegroundColorSpan(Color.parseColor("#0E7C7B")), 0, end, 0)
+            sb.setSpan(android.text.style.ForegroundColorSpan(Color.parseColor("#5A6370")), end, sb.length, 0)
+            text = sb
+        } else {
+            val sb = android.text.SpannableStringBuilder("▸ $line")
+            sb.setSpan(android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0, sb.length, 0)
+            sb.setSpan(android.text.style.ForegroundColorSpan(Color.parseColor("#0E7C7B")), 0, sb.length, 0)
+            text = sb
+        }
+    }
+
     fun button(ctx: Context, text: String, bg: Int = R.drawable.btn_primary, onClick: () -> Unit): Button =
         Button(ctx).apply {
             this.text = text

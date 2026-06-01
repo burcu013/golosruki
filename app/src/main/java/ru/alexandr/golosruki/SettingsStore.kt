@@ -33,6 +33,14 @@ object SettingsStore {
     fun getSwipeStrength(ctx: Context): Int = p(ctx).getInt("swipe_strength", 2)
     fun setSwipeStrength(ctx: Context, v: Int) = p(ctx).edit().putInt("swipe_strength", v).apply()
 
+    /** Точка старта свайпа (% экрана вдоль оси движения) для каждого направления. */
+    fun getSwipeStart(ctx: Context, dir: Direction): Int {
+        val def = when (dir) { Direction.DOWN -> 30; Direction.UP -> 70; Direction.LEFT -> 70; Direction.RIGHT -> 30 }
+        return p(ctx).getInt("swipe_start_" + dir.name, def)
+    }
+    fun setSwipeStart(ctx: Context, dir: Direction, v: Int) =
+        p(ctx).edit().putInt("swipe_start_" + dir.name, v.coerceIn(5, 95)).apply()
+
     fun getVibrate(ctx: Context): Boolean = p(ctx).getBoolean("vibrate", true)
     fun setVibrate(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("vibrate", v).apply()
     fun getKeepScreen(ctx: Context): Boolean = p(ctx).getBoolean("keep_screen", true)
@@ -41,11 +49,19 @@ object SettingsStore {
     fun getBigModel(ctx: Context): Boolean = p(ctx).getBoolean("big_model", false)
     fun setBigModel(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("big_model", v).apply()
 
-    fun getMediaCode(ctx: Context): String = p(ctx).getString("media_code", "видео")?.ifBlank { "видео" } ?: "видео"
+    fun getMediaCode(ctx: Context): String = p(ctx).getString("media_code", "медиа")?.ifBlank { "медиа" } ?: "медиа"
     fun setMediaCode(ctx: Context, v: String) = p(ctx).edit().putString("media_code", v.trim()).apply()
+    fun getMediaWindowSec(ctx: Context): Int = p(ctx).getInt("media_window", 4)
+    fun setMediaWindowSec(ctx: Context, v: Int) = p(ctx).edit().putInt("media_window", v.coerceIn(2, 10)).apply()
 
     fun getTts(ctx: Context): Boolean = p(ctx).getBoolean("tts", true)
     fun setTts(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("tts", v).apply()
+    fun getTtsPitch(ctx: Context): Float = p(ctx).getFloat("tts_pitch", 1.0f)
+    fun setTtsPitch(ctx: Context, v: Float) = p(ctx).edit().putFloat("tts_pitch", v).apply()
+    fun getTtsRate(ctx: Context): Float = p(ctx).getFloat("tts_rate", 1.0f)
+    fun setTtsRate(ctx: Context, v: Float) = p(ctx).edit().putFloat("tts_rate", v).apply()
+    fun getTtsVoice(ctx: Context): String = p(ctx).getString("tts_voice", "") ?: ""
+    fun setTtsVoice(ctx: Context, v: String) = p(ctx).edit().putString("tts_voice", v).apply()
     fun getConfirmCalls(ctx: Context): Boolean = p(ctx).getBoolean("confirm_calls", false)
     fun setConfirmCalls(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("confirm_calls", v).apply()
     fun getSosNumber2(ctx: Context): String = p(ctx).getString("sos_num2", "") ?: ""

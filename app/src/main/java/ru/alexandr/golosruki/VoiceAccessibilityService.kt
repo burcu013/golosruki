@@ -71,7 +71,7 @@ class VoiceAccessibilityService : AccessibilityService() {
     fun execute(command: Command) {
         // любая новая команда (кроме самого автоскролла) останавливает непрерывное листание
         if (command !is Command.AutoScroll) stopAutoScroll()
-        showStatus(command.label())
+        if (command !is Command.Unlock) showStatus(command.label())
         when (command) {
             Command.Back -> performGlobalAction(GLOBAL_ACTION_BACK)
             Command.Home -> performGlobalAction(GLOBAL_ACTION_HOME)
@@ -88,9 +88,12 @@ class VoiceAccessibilityService : AccessibilityService() {
             Command.VolumeUp -> volume(android.media.AudioManager.ADJUST_RAISE)
             Command.VolumeDown -> volume(android.media.AudioManager.ADJUST_LOWER)
             Command.VolumeMute -> volume(android.media.AudioManager.ADJUST_MUTE)
+            is Command.SetVolume -> setVolumeLevel(command.level)
             Command.MediaPause -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
             Command.MediaPlay -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PLAY)
-            is Command.Swipe -> doScroll(command.direction)
+            Command.MediaNext -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_NEXT)
+            Command.MediaPrev -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+            is Command.Swipe -> doScroll(command.direction, command.fine)
             Command.ShowNumbers -> showNumbers()
             Command.Grid -> showGrid()
             Command.HideOverlay -> { mode = Mode.NONE; targets.clear(); overlay.clearTargets() }
@@ -134,21 +137,30 @@ class VoiceAccessibilityService : AccessibilityService() {
     }
 
     // --- Скролл: сначала пробуем прокрутить нужный контейнер, иначе жест по центру ---
-    private fun doScroll(direction: Direction) {
-        gestureScroll(direction)
+    private fun setVolumeLevel(level: Int) {
+        try {
+            val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+            val max = am.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+            val target = Math.round(level.coerceIn(1, 10) / 10f * max)
+            am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, target, android.media.AudioManager.FLAG_SHOW_UI)
+        } catch (e: Exception) { Logger.log("ACC", "Громкость N: ${e.message}") }
     }
 
-    private fun gestureScroll(direction: Direction) {
-        val (w, h) = screenSize()
-        val cx = w / 2f; val cy = h / 2f
+    private fun doScroll(direction: Direction, fine: Boolean = false) {
+        gestureScroll(direction, fine)
+    }
 
-        // калибровка
+    private fun gestureScroll(direction: Direction, fine: Boolean = false) {
+        val (w, h) = screenSize()
+
         val invV = SettingsStore.getSwipeInvertV(this)
         val invH = SettingsStore.getSwipeInvertH(this)
-        val frac = when (SettingsStore.getSwipeStrength(this)) {
-            1 -> 0.10f; 2 -> 0.16f; 3 -> 0.24f; 4 -> 0.34f; 5 -> 0.45f; else -> 0.16f
+        // длина: для короткого свайпа фиксированная маленькая, иначе по «силе»
+        val span = if (fine) 0.14f else when (SettingsStore.getSwipeStrength(this)) {
+            1 -> 0.20f; 2 -> 0.32f; 3 -> 0.48f; 4 -> 0.62f; 5 -> 0.80f; else -> 0.32f
         }
-        val dy = h * frac; val dx = w * frac
+        // короткий свайп медленнее (меньше инерции/пролистывания), обычный — быстрее
+        val dur = if (fine) 600L else 220L
 
         var dir = direction
         if ((dir == Direction.UP || dir == Direction.DOWN) && invV)
@@ -156,15 +168,18 @@ class VoiceAccessibilityService : AccessibilityService() {
         if ((dir == Direction.LEFT || dir == Direction.RIGHT) && invH)
             dir = if (dir == Direction.LEFT) Direction.RIGHT else Direction.LEFT
 
+        // точка старта (имитация пальца) — настраивается по каждому направлению, % экрана
+        val startFrac = SettingsStore.getSwipeStart(this, dir) / 100f
+        val cx = w / 2f; val cy = h / 2f
         val path = Path()
         when (dir) {
-            // палец движется в ту же сторону, что и команда
-            Direction.DOWN  -> { path.moveTo(cx, cy - dy); path.lineTo(cx, cy + dy) }
-            Direction.UP    -> { path.moveTo(cx, cy + dy); path.lineTo(cx, cy - dy) }
-            Direction.LEFT  -> { path.moveTo(cx + dx, cy); path.lineTo(cx - dx, cy) }
-            Direction.RIGHT -> { path.moveTo(cx - dx, cy); path.lineTo(cx + dx, cy) }
+            // палец движется В ТУ ЖЕ сторону, что и команда; старт — от заданной точки
+            Direction.DOWN  -> { val s = h * startFrac; path.moveTo(cx, s); path.lineTo(cx, (s + h * span).coerceAtMost(h - 1f)) }
+            Direction.UP    -> { val s = h * startFrac; path.moveTo(cx, s); path.lineTo(cx, (s - h * span).coerceAtLeast(1f)) }
+            Direction.LEFT  -> { val s = w * startFrac; path.moveTo(s, cy); path.lineTo((s - w * span).coerceAtLeast(1f), cy) }
+            Direction.RIGHT -> { val s = w * startFrac; path.moveTo(s, cy); path.lineTo((s + w * span).coerceAtMost(w - 1f), cy) }
         }
-        gesture(path, 200)
+        gesture(path, dur)
     }
 
     // --- Номера на кликабельных элементах ---
@@ -688,6 +703,7 @@ class VoiceAccessibilityService : AccessibilityService() {
             Logger.log("ACC", "«привет» проигнорирован — экран включён и разблокирован")
             return
         }
+        showStatus("Разблокировка")
         try {
             @Suppress("DEPRECATION")
             val wl = pm.newWakeLock(

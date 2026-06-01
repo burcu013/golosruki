@@ -51,10 +51,27 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private val dictBuffer = StringBuilder()
     @Volatile private var bigModelActive = false
     @Volatile private var mediaControlMode = false
-    private var mediaCode = "видео"
+    private var mediaCode = "медиа"
+    @Volatile private var screenOffMedia = false
+    private var mediaWindowMs = 4000L
+    private val screenOffMediaOff = Runnable { screenOffMedia = false; Logger.log("MEDIA", "Окно медиа (экран выкл) закрыто") }
+    private val mediaModeOff = Runnable { mediaControlMode = false; Logger.log("MEDIA", "Медиа-режим выключен по таймауту") }
+    private fun armScreenOffMedia() {
+        screenOffMedia = true
+        handler.removeCallbacks(screenOffMediaOff)
+        handler.postDelayed(screenOffMediaOff, mediaWindowMs)
+    }
+    private fun armMediaMode() {
+        handler.removeCallbacks(mediaModeOff)
+        handler.postDelayed(mediaModeOff, 90_000L)
+    }
     private var tts: android.speech.tts.TextToSpeech? = null
     @Volatile private var ttsReady = false
+    @Volatile private var isSpeaking = false
     private var ttsEnabled = true
+    private var ttsPitch = 1.0f
+    private var ttsRate = 1.0f
+    private var ttsVoiceName = ""
     private var confirmCalls = false
     private var pendingCall: Pair<String, String>? = null   // имя -> номер (ожидает «да»)
 
@@ -124,15 +141,30 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         vibrateOnWake = SettingsStore.getVibrate(this)
         keepScreen = SettingsStore.getKeepScreen(this)
         mediaCode = SettingsStore.getMediaCode(this).lowercase().trim()
+        if (mediaCode == "видео") { mediaCode = "медиа"; SettingsStore.setMediaCode(this, "медиа") }  // миграция
+        mediaWindowMs = SettingsStore.getMediaWindowSec(this) * 1000L
         ttsEnabled = SettingsStore.getTts(this)
         confirmCalls = SettingsStore.getConfirmCalls(this)
+        ttsPitch = SettingsStore.getTtsPitch(this)
+        ttsRate = SettingsStore.getTtsRate(this)
+        ttsVoiceName = SettingsStore.getTtsVoice(this)
         if (ttsEnabled) {
             tts = android.speech.tts.TextToSpeech(this) { status ->
                 if (status == android.speech.tts.TextToSpeech.SUCCESS) {
                     runCatching { tts?.language = java.util.Locale("ru") }
+                    runCatching { tts?.setPitch(ttsPitch) }
+                    runCatching { tts?.setSpeechRate(ttsRate) }
+                    if (ttsVoiceName.isNotBlank()) runCatching {
+                        tts?.voices?.firstOrNull { it.name == ttsVoiceName }?.let { tts?.voice = it }
+                    }
                     ttsReady = true
                 }
             }
+            tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+                override fun onStart(id: String?) { isSpeaking = true }
+                override fun onDone(id: String?) { handler.postDelayed({ isSpeaking = false }, 400) }
+                @Deprecated("deprecated") override fun onError(id: String?) { handler.postDelayed({ isSpeaking = false }, 400) }
+            })
         }
         Logger.log("REC", "Старт службы. Слово активации: '$wakeWord', сон: ${idleMs / 1000}с")
         Logger.log("CFG", "Контактов: ${personal.contacts.size} ${personal.contacts.keys}; " +
@@ -191,9 +223,13 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     fun speak(text: String) {
         if (!ttsEnabled || !ttsReady) return
+        isSpeaking = true   // глушим распознавание, пока говорит синтезатор (анти-петля)
         runCatching {
             tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki")
         }
+        // страховка: если движок не сообщит об окончании — снимем флаг по времени
+        val ms = 1500L + text.length * 90L
+        handler.postDelayed({ isSpeaking = false }, ms)
     }
 
     private fun vibrateTick() {
@@ -322,54 +358,83 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         val text = normalize(raw.replace("[unk]", " "))
         if (text.isBlank()) return
 
-        // ЭКРАН ВЫКЛЮЧЕН/ЗАБЛОКИРОВАН: реагируем ТОЛЬКО на «<слово активации> привет» —
-        // эта фраза зажигает экран и снимает блокировку. Остальные команды игнорируются.
+        // Анти-петля: пока проигрывается синтезатор, не распознаём (иначе слышим сами себя)
+        if (isSpeaking) { Logger.log("REC", "Игнор (говорит синтезатор): '$text'"); return }
+
+        // ЭКРАН ВЫКЛЮЧЕН/ЗАБЛОКИРОВАН. Экран НЕ зажигаем. Разрешено:
+        //  • «<слово> привет» — единственное, что включает/разблокирует экран;
+        //  • «<слово> пауза/играй/следующее/предыдущее/громче/тише» — быстрое управление звуком;
+        //  • «<слово> <код медиа>» — открыть окно медиа на mediaWindowMs: дальше те же аудио-команды
+        //    можно говорить БЕЗ слова активации (экран по-прежнему не загорается).
         if (!isScreenOn()) {
-            if (text.contains(wakeWord) && text.contains("привет")) {
+            val hasWake = text.contains(wakeWord)
+            // активное окно медиа — принимаем аудио-команды без слова активации
+            if (screenOffMedia) {
+                val c = CommandParser.parseAudioOnly(text)
+                if (c != null) {
+                    Logger.log("MEDIA", "Экран выкл, окно медиа: ${c.label()}")
+                    armScreenOffMedia()
+                    post { VoiceAccessibilityService.instance?.execute(c) }
+                    return
+                }
+            }
+            if (hasWake && text.contains("привет")) {
                 state = State.AWAKE
                 if (paused) setPaused(false)
                 resetIdle()
                 Logger.log("REC", "Экран выкл → пробуждение по «$wakeWord привет»")
                 if (keepScreen) VoiceAccessibilityService.instance?.keepScreenOn(true)
                 post { VoiceAccessibilityService.instance?.execute(Command.Unlock) }
-            } else {
-                Logger.log("REC", "Игнор (экран выключен): '$text'")
+                return
             }
+            if (hasWake) {
+                val rest = stripWake(text).trim()
+                if (mediaCode.isNotBlank() && rest == mediaCode) {
+                    armScreenOffMedia()
+                    Logger.log("MEDIA", "Экран выкл → окно медиа открыто (${mediaWindowMs / 1000}с)")
+                    return
+                }
+                val c = CommandParser.parseAudioOnly(rest)
+                if (c != null) {
+                    Logger.log("MEDIA", "Экран выкл, быстрая команда: ${c.label()}")
+                    post { VoiceAccessibilityService.instance?.execute(c) }
+                    return
+                }
+            }
+            Logger.log("REC", "Игнор (экран выключен): '$text'")
             return
         }
 
-        // Сброс видео-режима, когда медиа перестало играть
-        if (mediaControlMode && !isMediaPlaying()) mediaControlMode = false
-
-        // Во время видео/музыки
-        if (ignoreMedia && isMediaPlaying()) {
+        // Во время видео/музыки ИЛИ пока активен медиа-режим (держится даже на паузе)
+        if (ignoreMedia && (isMediaPlaying() || mediaControlMode)) {
             if (text.contains(wakeWord)) {
                 val rest = stripWake(text).trim()
-                // переключение ВИДЕО-РЕЖИМА по кодовому слову: «<слово> <код>»
-                if (mediaCode.isNotBlank() && (rest == mediaCode || rest.contains(mediaCode))) {
+                // переключение МЕДИА-РЕЖИМА по кодовому слову — только при ТОЧНОМ совпадении
+                if (mediaCode.isNotBlank() && rest == mediaCode) {
                     mediaControlMode = !mediaControlMode
+                    if (mediaControlMode) armMediaMode() else handler.removeCallbacks(mediaModeOff)
                     if (paused) setPaused(false)
                     resetIdle()
                     VoiceAccessibilityService.instance?.showStatus(
-                        if (mediaControlMode) "🎬 Видео-режим ВКЛ: пауза/вверх/вниз/тап без «${cap(wakeWord)}»"
-                        else "Видео-режим выкл"
+                        if (mediaControlMode) "🎵 Медиа-режим ВКЛ: пауза/играй/треки/листание без «${cap(wakeWord)}»"
+                        else "Медиа-режим выкл"
                     )
                     return
                 }
                 Logger.log("MEDIA", "Активация при медиа: '$rest'")
                 if (paused) setPaused(false)
                 resetIdle()
-                if (rest.isBlank()) VoiceAccessibilityService.instance?.showStatus("${cap(wakeWord)} слушает (видео)")
-                else handleCommand(rest)   // полный набор: пауза/играй, номера, тап, сетка, листание
+                if (mediaControlMode) armMediaMode()
+                if (rest.isBlank()) VoiceAccessibilityService.instance?.showStatus("${cap(wakeWord)} слушает (медиа)")
+                else handleCommand(rest)
             } else if (mediaControlMode) {
-                // ВИДЕО-РЕЖИМ: безопасный набор команд без слова активации (листать шортсы и т.п.)
                 val c = CommandParser.parseMedia(text)
                 if (c != null) {
-                    Logger.log("MEDIA", "Видео-режим: ${c.label()}")
-                    resetIdle()
+                    Logger.log("MEDIA", "Медиа-режим: ${c.label()}")
+                    resetIdle(); armMediaMode()
                     post { VoiceAccessibilityService.instance?.execute(c) }
                 } else {
-                    Logger.log("REC", "Видео-режим: '$text' — не команда, игнор")
+                    Logger.log("REC", "Медиа-режим: '$text' — не команда, игнор")
                 }
             } else {
                 Logger.log("REC", "Игнор (играет медиа): '$text'")

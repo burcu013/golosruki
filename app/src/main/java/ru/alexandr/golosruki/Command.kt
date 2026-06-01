@@ -19,9 +19,12 @@ sealed class Command {
     object VolumeUp : Command()
     object VolumeDown : Command()
     object VolumeMute : Command()
+    data class SetVolume(val level: Int) : Command()    // точная громкость 1..10
     object MediaPause : Command()             // пауза воспроизведения
     object MediaPlay : Command()              // воспроизвести
-    data class Swipe(val direction: Direction) : Command()
+    object MediaNext : Command()              // следующий трек
+    object MediaPrev : Command()              // предыдущий трек
+    data class Swipe(val direction: Direction, val fine: Boolean = false) : Command()
     object ShowNumbers : Command()
     object Grid : Command()                   // сетка 3×4 = 12 ячеек, двухуровневая
     object HideOverlay : Command()
@@ -65,9 +68,12 @@ sealed class Command {
         VolumeUp -> "Громче"
         VolumeDown -> "Тише"
         VolumeMute -> "Без звука"
+        is SetVolume -> "Громкость $level из 10"
         MediaPause -> "Пауза видео"
         MediaPlay -> "Воспроизвести"
-        is Swipe -> "Свайп " + direction.name.lowercase()
+        MediaNext -> "Следующий трек"
+        MediaPrev -> "Предыдущий трек"
+        is Swipe -> (if (fine) "Короткий свайп " else "Свайп ") + direction.name.lowercase()
         ShowNumbers -> "Показываю номера"
         Grid -> "Сетка 12"
         HideOverlay -> "Скрыто"

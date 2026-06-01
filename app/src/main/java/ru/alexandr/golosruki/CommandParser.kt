@@ -34,6 +34,7 @@ object CommandParser {
             t.contains("положи трубку") || t.contains("отбой")) return Command.RejectCall
         if (t.contains("беззвучно") || t.contains("заглуши") || t.contains("тихо")) return Command.SilenceRinger
         if (t.contains("без звука") || t.contains("выключи звук") || t.contains("отключи звук")) return Command.VolumeMute
+        if (t.contains("громкость")) { val n = extractNumber(t); if (n != null && n in 1..10) return Command.SetVolume(n) }
         if (t.contains("громче")) return Command.VolumeUp
         if (t.contains("тише")) return Command.VolumeDown
 
@@ -101,6 +102,8 @@ object CommandParser {
             t.contains("молчи") || t.contains("замолчи") || t.contains("замри") -> return Command.Pause
             t.contains("пауза") || t.contains("останови") || t.contains("стоп") || t.contains("хватит") -> return Command.MediaPause
             t.contains("воспроизв") || t.contains("играй") || t.contains("плей") || t.contains("продолж") -> return Command.MediaPlay
+            t.contains("следующ") -> return Command.MediaNext
+            t.contains("предыдущ") -> return Command.MediaPrev
             t.contains("слушай") || t.contains("продолжи") -> return Command.Resume
             t.contains("скрой") || t.contains("убери") || t.contains("спрячь") || t.contains("отмена") -> return Command.HideOverlay
             t.contains("номера") || t.contains("кнопки") -> return Command.ShowNumbers
@@ -141,10 +144,10 @@ object CommandParser {
 
         // 2. Свайпы
         when {
-            t.contains("вверх") -> return Command.Swipe(Direction.UP)
-            t.contains("вниз") -> return Command.Swipe(Direction.DOWN)
-            t.contains("влево") -> return Command.Swipe(Direction.LEFT)
-            t.contains("вправо") -> return Command.Swipe(Direction.RIGHT)
+            t.contains("вверх") -> return Command.Swipe(Direction.UP, isFine(t))
+            t.contains("вниз") -> return Command.Swipe(Direction.DOWN, isFine(t))
+            t.contains("влево") -> return Command.Swipe(Direction.LEFT, isFine(t))
+            t.contains("вправо") -> return Command.Swipe(Direction.RIGHT, isFine(t))
         }
 
         // 3. Нажатия с номером
@@ -163,6 +166,21 @@ object CommandParser {
     }
 
     /** Разрешённые команды во время воспроизведения медиа (после слова активации). */
+    /** Только безопасные аудио-команды (без жестов/тапов) — для управления при ВЫКЛЮЧЕННОМ экране. */
+    fun parseAudioOnly(raw: String): Command? {
+        val t = raw.lowercase()
+        return when {
+            t.contains("громче") -> Command.VolumeUp
+            t.contains("тише") -> Command.VolumeDown
+            t.contains("без звука") || t.contains("выключи звук") -> Command.VolumeMute
+            t.contains("пауза") || t.contains("останови") || t.contains("стоп") -> Command.MediaPause
+            t.contains("воспроизв") || t.contains("играй") || t.contains("плей") || t.contains("продолж") -> Command.MediaPlay
+            t.contains("следующ") -> Command.MediaNext
+            t.contains("предыдущ") -> Command.MediaPrev
+            else -> null
+        }
+    }
+
     fun parseMedia(raw: String): Command? {
         val t = raw.lowercase()
         return when {
@@ -171,9 +189,11 @@ object CommandParser {
             t.contains("без звука") || t.contains("выключи звук") -> Command.VolumeMute
             t.contains("пауза") || t.contains("останови") || t.contains("стоп") -> Command.MediaPause
             t.contains("воспроизв") || t.contains("играй") || t.contains("плей") || t.contains("продолж") -> Command.MediaPlay
+            t.contains("следующ") -> Command.MediaNext
+            t.contains("предыдущ") -> Command.MediaPrev
             // короткие видео (шортс/рилс/клипы): листание и тап для паузы/плей
-            t.contains("вверх") || t.contains("предыдущ") -> Command.Swipe(Direction.UP)
-            t.contains("вниз") || t.contains("дальше") || t.contains("следующ") -> Command.Swipe(Direction.DOWN)
+            t.contains("вверх") -> Command.Swipe(Direction.UP)
+            t.contains("вниз") || t.contains("дальше") -> Command.Swipe(Direction.DOWN)
             t.contains("тап") || t.contains("центр") || t.contains("нажми") -> Command.TapCenter
             t.contains("назад") || t.contains("выход") || t.contains("закрой") -> Command.Back
             t.contains("домой") -> Command.Home
@@ -227,6 +247,10 @@ object CommandParser {
         t.contains("вправо") -> Direction.RIGHT
         else -> null
     }
+
+    private fun isFine(t: String): Boolean =
+        t.contains("чуть") || t.contains("немного") || t.contains("коротко") ||
+        t.contains("слегка") || t.contains("мало") || t.contains("чуточку")
 
     private fun extractNumber(t: String): Int? {
         Regex("\\d+").find(t)?.let { return it.value.toIntOrNull() }

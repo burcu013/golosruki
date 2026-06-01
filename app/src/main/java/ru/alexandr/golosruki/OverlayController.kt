@@ -35,7 +35,9 @@ class OverlayController(private val context: Context) {
         view = v
     }
 
-    fun showStatus(text: String) { ensureView(); view?.setStatus(text) }
+    fun showStatus(text: String) { ensureView(); view?.setStatus(text, 1) }
+    fun showStatusMultiline(text: String, maxLines: Int) { ensureView(); view?.setStatus(text, maxLines) }
+    fun setStatusIcon(icon: OverlayView.Icon) { ensureView(); view?.setIcon(icon) }
     fun showNumbers(list: List<Pair<Int, Rect>>) {
         ensureView(); view?.setTargets(list.map { OverlayView.Target(it.first, it.second) }, false)
     }
@@ -43,7 +45,12 @@ class OverlayController(private val context: Context) {
         ensureView(); view?.setTargets(list.map { OverlayView.Target(it.first, it.second) }, true)
     }
     fun showHelp() {
-        showStatus("Команды: номера · нажми N · нажми <надпись> · вниз/чуть вниз · открой X · позвони X · медиа · диктовка · сос")
+        ensureView()
+        view?.setStatus(
+            "Иван — разбудить. Команды: номера · нажми N · нажми «надпись» · вниз / чуть вниз · " +
+                "в самый низ · открой X · позвони X · громкость N · медиа · диктовка · копировать · сос · домой · назад",
+            3
+        )
     }
     fun clearTargets() { view?.clearTargets() }
 

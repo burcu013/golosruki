@@ -152,7 +152,7 @@ class MainActivity : ComponentActivity() {
         card.addView(UiKit.sectionHeader(this, "О приложении"))
         card.addView(UiKit.body(this, "ГолосРуки — голосовое управление смартфоном для людей с ограниченными возможностями."))
         card.addView(UiKit.body(this, "Офлайн-распознавание речи, без интернета и без передачи данных."))
-        card.addView(UiKit.body(this, "Версия 5.3 • Разработчик: Донбасс Реклама"))
+        card.addView(UiKit.body(this, "Версия 5.6 • Разработчик: Донбасс Реклама"))
         return card
     }
 
@@ -167,6 +167,7 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.ACCESS_FINE_LOCATION
         )
         if (Build.VERSION.SDK_INT >= 33) perms.add(Manifest.permission.POST_NOTIFICATIONS)
+        if (Build.VERSION.SDK_INT >= 31) perms.add(Manifest.permission.BLUETOOTH_CONNECT)
         permLauncher.launch(perms.toTypedArray())
     }
 

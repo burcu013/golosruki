@@ -38,6 +38,59 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var keepScreen = true
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager }
 
+    // --- Bluetooth-микрофон (SCO) с откатом на встроенный ---
+    @Volatile private var btMicWanted = false
+    @Volatile private var btScoOn = false
+    private var btReceiver: android.content.BroadcastReceiver? = null
+    private fun enableBtMic() {
+        btMicWanted = true
+        runCatching {
+            if (btReceiver == null) {
+                btReceiver = object : android.content.BroadcastReceiver() {
+                    override fun onReceive(c: Context?, i: Intent?) {
+                        val st = i?.getIntExtra(android.media.AudioManager.EXTRA_SCO_AUDIO_STATE, -1) ?: -1
+                        when (st) {
+                            android.media.AudioManager.SCO_AUDIO_STATE_CONNECTED -> {
+                                btScoOn = true
+                                Logger.log("MIC", "Bluetooth-микрофон подключён")
+                                VoiceAccessibilityService.instance?.showStatus("🎧 Bluetooth-микрофон активен")
+                                if (model != null) restartListening()
+                            }
+                            android.media.AudioManager.SCO_AUDIO_STATE_DISCONNECTED,
+                            android.media.AudioManager.SCO_AUDIO_STATE_ERROR -> {
+                                if (btScoOn || btMicWanted) {
+                                    btScoOn = false
+                                    Logger.log("MIC", "Bluetooth-микрофон недоступен — откат на встроенный")
+                                    VoiceAccessibilityService.instance?.showStatus("Bluetooth-микрофон недоступен — встроенный")
+                                    if (model != null) restartListening()
+                                }
+                            }
+                        }
+                    }
+                }
+                val filter = android.content.IntentFilter(android.media.AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
+                if (Build.VERSION.SDK_INT >= 33)
+                    registerReceiver(btReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                else
+                    registerReceiver(btReceiver, filter)
+            }
+            audioManager.startBluetoothSco()
+            audioManager.isBluetoothScoOn = true
+        }
+        // страховка: если за 8 c не подключилось — работаем на встроенном
+        handler.postDelayed({
+            if (btMicWanted && !btScoOn) {
+                Logger.log("MIC", "BT SCO не подключился за 8с — встроенный микрофон")
+                VoiceAccessibilityService.instance?.showStatus("Bluetooth-микрофон не подключился — встроенный")
+            }
+        }, 8000)
+    }
+    private fun disableBtMic() {
+        btMicWanted = false; btScoOn = false
+        runCatching { audioManager.isBluetoothScoOn = false; audioManager.stopBluetoothSco() }
+        runCatching { btReceiver?.let { unregisterReceiver(it) } }; btReceiver = null
+    }
+
     /** Играет ли сейчас звук. isMusicActive = true только при реальном воспроизведении. */
     private fun isMediaPlaying(): Boolean = try { audioManager.isMusicActive } catch (e: Exception) { false }
 
@@ -72,6 +125,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (mediaControlMode) {
             mediaControlMode = false
             handler.removeCallbacks(mediaModeOff)
+            VoiceAccessibilityService.instance?.setStatusIcon(OverlayView.Icon.DOT)
             Logger.log("MEDIA", "Медиа-режим выключен (выход/блокировка)")
         }
     }
@@ -80,6 +134,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (mediaControlMode) armMediaMode() else handler.removeCallbacks(mediaModeOff)
         if (paused) setPaused(false)
         resetIdle()
+        VoiceAccessibilityService.instance?.setStatusIcon(
+            if (mediaControlMode) OverlayView.Icon.MEDIA else OverlayView.Icon.DOT
+        )
         VoiceAccessibilityService.instance?.showStatus(
             if (mediaControlMode) "🎵 Медиа-режим ВКЛ: пауза/играй/треки/листание без «${cap(wakeWord)}»"
             else "Медиа-режим выкл"
@@ -166,6 +223,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         ttsPitch = SettingsStore.getTtsPitch(this)
         ttsRate = SettingsStore.getTtsRate(this)
         ttsVoiceName = SettingsStore.getTtsVoice(this)
+        if (SettingsStore.getBtMic(this)) enableBtMic()
         if (ttsEnabled) {
             tts = android.speech.tts.TextToSpeech(this) { status ->
                 if (status == android.speech.tts.TextToSpeech.SUCCESS) {
@@ -360,6 +418,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         dictation = true
         dictationDigits = digits
         dictBuffer.setLength(0)
+        VoiceAccessibilityService.instance?.setStatusIcon(if (digits) OverlayView.Icon.DIGITS else OverlayView.Icon.PEN)
         // лениво подгружаем большую модель для текста (один раз), команды это не тормозит
         if (bigForDictation && bigModel == null && !bigLoading) {
             bigLoading = true
@@ -389,6 +448,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         dictation = false
         dictationDigits = false
         dictBuffer.setLength(0)
+        VoiceAccessibilityService.instance?.setStatusIcon(OverlayView.Icon.DOT)
         VoiceAccessibilityService.instance?.showStatus("Команды активны")
         restartListening()   // обратно на малую + грамматику (быстро)
         resetIdle(); refreshNotification()
@@ -620,6 +680,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         runCatching { speechService?.shutdown() }
         model?.close()
         runCatching { bigModel?.close() }; bigModel = null
+        disableBtMic()
         runCatching { tts?.stop(); tts?.shutdown() }
         instance = null
     }

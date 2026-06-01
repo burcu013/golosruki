@@ -154,6 +154,23 @@ object UiKit {
             setOnClickListener { onClick() }
         }
 
+    /** Стильный переключатель (зелёный во включённом состоянии). */
+    fun switchView(ctx: Context): android.widget.Switch = android.widget.Switch(ctx).apply {
+        textSize = 15f
+        setTextColor(Color.parseColor("#1C1E22"))
+        val checkedStates = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+        thumbTintList = android.content.res.ColorStateList(checkedStates,
+            intArrayOf(Color.parseColor("#2FAE6A"), Color.parseColor("#FFFFFF")))
+        trackTintList = android.content.res.ColorStateList(checkedStates,
+            intArrayOf(Color.parseColor("#882FAE6A"), Color.parseColor("#C2CBCB")))
+        val lp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        lp.topMargin = dp(ctx, 6)
+        layoutParams = lp
+        setPadding(0, dp(ctx, 8), 0, dp(ctx, 8))
+    }
+
     fun card(ctx: Context): LinearLayout = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
         setBackgroundResource(R.drawable.card_bg)

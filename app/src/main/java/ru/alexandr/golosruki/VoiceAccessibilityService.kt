@@ -63,6 +63,9 @@ class VoiceAccessibilityService : AccessibilityService() {
     fun showStatus(text: String) {
         if (this::overlay.isInitialized) overlay.showStatus(text)
     }
+    fun setStatusIcon(icon: OverlayView.Icon) {
+        if (this::overlay.isInitialized) overlay.setStatusIcon(icon)
+    }
 
     fun keepScreenOn(on: Boolean) {
         if (this::overlay.isInitialized) overlay.setKeepScreenOn(on)

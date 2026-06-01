@@ -13,10 +13,13 @@ import androidx.activity.ComponentActivity
 /** Преднастройка под конкретного человека: слово активации, тайм-аут, SOS, быстрые контакты. */
 class SettingsActivity : ComponentActivity() {
 
+    companion object { private const val REQ_EXPORT = 2001; private const val REQ_IMPORT = 2002 }
+
     private lateinit var wake: EditText
     private lateinit var mediaCodeField: EditText
-    private lateinit var ttsCheck: android.widget.CheckBox
-    private lateinit var confirmCheck: android.widget.CheckBox
+    private lateinit var ttsCheck: android.widget.Switch
+    private lateinit var confirmCheck: android.widget.Switch
+    private lateinit var btMicCheck: android.widget.Switch
     private lateinit var sosNum2: EditText
     private lateinit var voiceSpinner: android.widget.Spinner
     private lateinit var pitchBar: android.widget.SeekBar
@@ -26,11 +29,11 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var sosNum: EditText
     private lateinit var sosTxt: EditText
     private lateinit var sosPin: EditText
-    private lateinit var ignoreMediaCheck: android.widget.CheckBox
-    private lateinit var vibrateCheck: android.widget.CheckBox
-    private lateinit var keepScreenCheck: android.widget.CheckBox
-    private lateinit var invVCheck: android.widget.CheckBox
-    private lateinit var invHCheck: android.widget.CheckBox
+    private lateinit var ignoreMediaCheck: android.widget.Switch
+    private lateinit var vibrateCheck: android.widget.Switch
+    private lateinit var keepScreenCheck: android.widget.Switch
+    private lateinit var invVCheck: android.widget.Switch
+    private lateinit var invHCheck: android.widget.Switch
     private lateinit var strengthField: EditText
     private lateinit var startDown: EditText
     private lateinit var startUp: EditText
@@ -43,7 +46,7 @@ class SettingsActivity : ComponentActivity() {
         box.addView(f)
         return f
     }
-    private lateinit var bigModelCheck: android.widget.CheckBox
+    private lateinit var bigModelCheck: android.widget.Switch
     private lateinit var modelStatus: android.widget.TextView
     private val nameFields = mutableListOf<EditText>()
     private val numberFields = mutableListOf<EditText>()
@@ -90,18 +93,18 @@ class SettingsActivity : ComponentActivity() {
         a.addView(UiKit.body(this, "Сон через (секунд тишины):"))
         idle = field(InputType.TYPE_CLASS_NUMBER).also { it.setText(SettingsStore.getIdle(this).toString()) }
         a.addView(idle)
-        ignoreMediaCheck = android.widget.CheckBox(this).apply {
+        ignoreMediaCheck = UiKit.switchView(this).apply {
             text = "Не реагировать во время видео/музыки"
             textSize = 15f
             isChecked = SettingsStore.getIgnoreMedia(this@SettingsActivity)
         }
         a.addView(ignoreMediaCheck)
-        vibrateCheck = android.widget.CheckBox(this).apply {
+        vibrateCheck = UiKit.switchView(this).apply {
             text = "Вибро-отклик при активации"; textSize = 15f
             isChecked = SettingsStore.getVibrate(this@SettingsActivity)
         }
         a.addView(vibrateCheck)
-        keepScreenCheck = android.widget.CheckBox(this).apply {
+        keepScreenCheck = UiKit.switchView(this).apply {
             text = "Не гасить экран, пока активен"; textSize = 15f
             isChecked = SettingsStore.getKeepScreen(this@SettingsActivity)
         }
@@ -112,28 +115,34 @@ class SettingsActivity : ComponentActivity() {
         a.addView(UiKit.body(this, "Окно медиа при ВЫКЛЮЧЕННОМ экране (сек). Скажете «<слово> <код>» — телефон ждёт «играй/пауза/следующее/громче» столько секунд, не зажигая экран:"))
         mediaWindow = field(InputType.TYPE_CLASS_NUMBER).also { it.setText(SettingsStore.getMediaWindowSec(this).toString()) }
         a.addView(mediaWindow)
-        ttsCheck = android.widget.CheckBox(this).apply {
+        ttsCheck = UiKit.switchView(this).apply {
             text = "Голосовые подтверждения (озвучивание действий)"; textSize = 15f
             isChecked = SettingsStore.getTts(this@SettingsActivity)
         }
         a.addView(ttsCheck)
-        confirmCheck = android.widget.CheckBox(this).apply {
+        confirmCheck = UiKit.switchView(this).apply {
             text = "Спрашивать подтверждение перед звонком"; textSize = 15f
             isChecked = SettingsStore.getConfirmCalls(this@SettingsActivity)
         }
         a.addView(confirmCheck)
+        btMicCheck = UiKit.switchView(this).apply {
+            text = "Bluetooth-микрофон (гарнитура)"; textSize = 15f
+            isChecked = SettingsStore.getBtMic(this@SettingsActivity)
+        }
+        a.addView(btMicCheck)
+        a.addView(UiKit.hint(this, "🎧 Если гарнитура недоступна или села — Иван автоматически вернётся на встроенный микрофон. Поддержка зависит от модели телефона/гарнитуры."))
         col.addView(a)
 
         // Калибровка свайпов
         val cal = UiKit.card(this)
         cal.addView(UiKit.sectionHeader(this, "Калибровка свайпов"))
         cal.addView(UiKit.body(this, "Свайп = жест пальцем. Если направление непривычно (или планшет повёрнут) — поменяйте местами."))
-        invVCheck = android.widget.CheckBox(this).apply {
+        invVCheck = UiKit.switchView(this).apply {
             text = "Поменять местами верх/вниз"; textSize = 15f
             isChecked = SettingsStore.getSwipeInvertV(this@SettingsActivity)
         }
         cal.addView(invVCheck)
-        invHCheck = android.widget.CheckBox(this).apply {
+        invHCheck = UiKit.switchView(this).apply {
             text = "Поменять местами влево/вправо"; textSize = 15f
             isChecked = SettingsStore.getSwipeInvertH(this@SettingsActivity)
         }
@@ -204,7 +213,7 @@ class SettingsActivity : ComponentActivity() {
         val mc = UiKit.card(this)
         mc.addView(UiKit.sectionHeader(this, "Точность распознавания"))
         mc.addView(UiKit.body(this, "Большая модель (≈1.8 ГБ) используется ТОЛЬКО для голосового набора текста (диктовки) — там она пишет грамотнее. Команды всегда работают на быстрой малой модели, поэтому приложение не тормозит. Загрузка в фоне, с авто-докачкой и отменой; нужно ~4 ГБ места. При первой диктовке после включения возможна пауза в пару секунд на загрузку."))
-        bigModelCheck = android.widget.CheckBox(this).apply {
+        bigModelCheck = UiKit.switchView(this).apply {
             text = "Большая модель для диктовки текста"; textSize = 15f
             isChecked = SettingsStore.getBigModel(this@SettingsActivity)
             isEnabled = ModelDownloader.isReady(this@SettingsActivity)
@@ -233,7 +242,7 @@ class SettingsActivity : ComponentActivity() {
         // --- Голос озвучки ---
         val vc = UiKit.card(this)
         vc.addView(UiKit.sectionHeader(this, "Голос озвучки (TTS)"))
-        vc.addView(UiKit.body(this, "Выберите голос (мужской/женский — из доступных в системе), тембр и скорость. Если голосов мало или качество низкое — установите «Речевой синтезатор Google» и языки в системных настройках."))
+        vc.addView(UiKit.body(this, "По умолчанию голос настроен мягче и чуть ниже (спокойный мужской тембр). Конкретный голос (мужской/женский) зависит от установленного в системе движка. Если голосов мало — поставьте «Речевой синтезатор Google» и скачайте русские голоса. Тембр и скорость — ползунками ниже."))
 
         vc.addView(UiKit.body(this, "Голос:"))
         voiceSpinner = android.widget.Spinner(this)
@@ -259,9 +268,51 @@ class SettingsActivity : ComponentActivity() {
         col.addView(vc)
         initVoices()
 
+        val bc = UiKit.card(this)
+        bc.addView(UiKit.sectionHeader(this, "Резервная копия настроек"))
+        bc.addView(UiKit.body(this, "Сохраните все настройки (слово активации, контакты, команды, голос, калибровка) в файл — поделиться или перенести на другой телефон."))
+        bc.addView(UiKit.button(this, "📤 Экспорт в файл") {
+            val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"
+                putExtra(Intent.EXTRA_TITLE, "golosruki_settings.json")
+            }
+            runCatching { startActivityForResult(i, REQ_EXPORT) }
+        })
+        bc.addView(UiKit.button(this, "📥 Импорт из файла", R.drawable.btn_amber) {
+            val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"
+            }
+            runCatching { startActivityForResult(i, REQ_IMPORT) }
+        })
+        col.addView(bc)
+
         col.addView(UiKit.button(this, "💾 Сохранить и перезапустить", R.drawable.btn_amber) { save() })
 
         setContentView(ScrollView(this).apply { addView(col) })
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        when (requestCode) {
+            REQ_EXPORT -> runCatching {
+                contentResolver.openOutputStream(uri)?.use { it.write(SettingsStore.exportJson(this).toByteArray(Charsets.UTF_8)) }
+                Toast.makeText(this, "Настройки сохранены в файл", Toast.LENGTH_SHORT).show()
+            }.onFailure { Toast.makeText(this, "Ошибка экспорта", Toast.LENGTH_SHORT).show() }
+            REQ_IMPORT -> {
+                val txt = runCatching { contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }.getOrNull()
+                if (txt != null && SettingsStore.importJson(this, txt)) {
+                    Toast.makeText(this, "Настройки импортированы — перезапуск", Toast.LENGTH_LONG).show()
+                    val s = Intent(this, VoiceRecognitionService::class.java)
+                    stopService(s)
+                    if (Build.VERSION.SDK_INT >= 26) startForegroundService(s) else startService(s)
+                    recreate()
+                } else {
+                    Toast.makeText(this, "Не удалось прочитать файл настроек", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     private var voiceTts: android.speech.tts.TextToSpeech? = null
@@ -370,6 +421,7 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setMediaWindowSec(this, mediaWindow.text.toString().toIntOrNull() ?: 4)
         SettingsStore.setTts(this, ttsCheck.isChecked)
         SettingsStore.setConfirmCalls(this, confirmCheck.isChecked)
+        SettingsStore.setBtMic(this, btMicCheck.isChecked)
         SettingsStore.setSosNumber2(this, sosNum2.text.toString())
         if (::pitchBar.isInitialized) SettingsStore.setTtsPitch(this, curPitch())
         if (::rateBar.isInitialized) SettingsStore.setTtsRate(this, curRate())

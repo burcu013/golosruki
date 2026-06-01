@@ -8,6 +8,43 @@ object SettingsStore {
     private const val PREF = "golosruki"
     private fun p(ctx: Context) = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
 
+    /** Экспорт всех персональных настроек в JSON-строку. */
+    fun exportJson(ctx: Context): String {
+        val o = org.json.JSONObject()
+        for ((k, v) in p(ctx).all) {
+            when (v) {
+                is Boolean -> o.put(k, v)
+                is Int -> o.put(k, v)
+                is Float -> o.put(k, v.toDouble())
+                is Long -> o.put(k, v)
+                is String -> o.put(k, v)
+                else -> {}
+            }
+        }
+        return o.toString(2)
+    }
+
+    /** Импорт настроек из JSON-строки (типы выводятся как при сохранении). */
+    fun importJson(ctx: Context, json: String): Boolean {
+        return try {
+            val o = org.json.JSONObject(json)
+            val e = p(ctx).edit()
+            val it = o.keys()
+            while (it.hasNext()) {
+                val k = it.next()
+                when (val v = o.get(k)) {
+                    is Boolean -> e.putBoolean(k, v)
+                    is Int -> e.putInt(k, v)
+                    is Double -> e.putFloat(k, v.toFloat())
+                    is Long -> e.putLong(k, v)
+                    is String -> e.putString(k, v)
+                    else -> {}
+                }
+            }
+            e.apply(); true
+        } catch (ex: Exception) { false }
+    }
+
     fun getWake(ctx: Context): String = p(ctx).getString("wake", "иван")?.ifBlank { "иван" } ?: "иван"
     fun setWake(ctx: Context, v: String) = p(ctx).edit().putString("wake", v.lowercase().trim()).apply()
 
@@ -58,10 +95,12 @@ object SettingsStore {
 
     fun getTts(ctx: Context): Boolean = p(ctx).getBoolean("tts", true)
     fun setTts(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("tts", v).apply()
-    fun getTtsPitch(ctx: Context): Float = p(ctx).getFloat("tts_pitch", 1.0f)
+    fun getTtsPitch(ctx: Context): Float = p(ctx).getFloat("tts_pitch", 0.9f)   // ниже = «мужественнее/мягче»
     fun setTtsPitch(ctx: Context, v: Float) = p(ctx).edit().putFloat("tts_pitch", v).apply()
-    fun getTtsRate(ctx: Context): Float = p(ctx).getFloat("tts_rate", 1.0f)
+    fun getTtsRate(ctx: Context): Float = p(ctx).getFloat("tts_rate", 0.95f)     // чуть медленнее = спокойнее
     fun setTtsRate(ctx: Context, v: Float) = p(ctx).edit().putFloat("tts_rate", v).apply()
+    fun getBtMic(ctx: Context): Boolean = p(ctx).getBoolean("bt_mic", false)
+    fun setBtMic(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("bt_mic", v).apply()
     fun getTtsVoice(ctx: Context): String = p(ctx).getString("tts_voice", "") ?: ""
     fun setTtsVoice(ctx: Context, v: String) = p(ctx).edit().putString("tts_voice", v).apply()
     fun getConfirmCalls(ctx: Context): Boolean = p(ctx).getBoolean("confirm_calls", false)

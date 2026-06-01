@@ -76,7 +76,7 @@ class MainActivity : ComponentActivity() {
             ).apply { bottomMargin = UiKit.dp(this@MainActivity, 4) }
         }
         h.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_launcher_foreground)
+            setImageResource(R.drawable.ic_launcher_fg)
             val s = UiKit.dp(this@MainActivity, 92)
             layoutParams = LinearLayout.LayoutParams(s, s)
         })
@@ -152,7 +152,7 @@ class MainActivity : ComponentActivity() {
         card.addView(UiKit.sectionHeader(this, "О приложении"))
         card.addView(UiKit.body(this, "ГолосРуки — голосовое управление смартфоном для людей с ограниченными возможностями."))
         card.addView(UiKit.body(this, "Офлайн-распознавание речи, без интернета и без передачи данных."))
-        card.addView(UiKit.body(this, "Версия 5.6 • Разработчик: Донбасс Реклама"))
+        card.addView(UiKit.body(this, "Версия 5.7 • Разработчик: Донбасс Реклама"))
         return card
     }
 

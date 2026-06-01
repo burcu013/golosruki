@@ -36,6 +36,7 @@ class MainActivity : ComponentActivity() {
         })
         setup.addView(UiKit.iconButton(this, "③  ▶ Запустить управление", R.drawable.btn_amber) { startVoice() })
         setup.addView(UiKit.iconButton(this, "🔁  Перезапустить Иван") { resetVoice() })
+        setup.addView(UiKit.iconButton(this, "🔋  Не выключать в фоне (важно!)") { requestBattery() })
         col.addView(setup)
 
         val nav = UiKit.card(this)
@@ -151,7 +152,7 @@ class MainActivity : ComponentActivity() {
         card.addView(UiKit.sectionHeader(this, "О приложении"))
         card.addView(UiKit.body(this, "ГолосРуки — голосовое управление смартфоном для людей с ограниченными возможностями."))
         card.addView(UiKit.body(this, "Офлайн-распознавание речи, без интернета и без передачи данных."))
-        card.addView(UiKit.body(this, "Версия 4.5 • Разработчик: Донбасс Реклама"))
+        card.addView(UiKit.body(this, "Версия 4.7 • Разработчик: Донбасс Реклама"))
         return card
     }
 
@@ -177,5 +178,20 @@ class MainActivity : ComponentActivity() {
     private fun resetVoice() {
         val intent = Intent(this, VoiceRecognitionService::class.java).setAction(VoiceRecognitionService.ACTION_RESET)
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+    }
+
+    @android.annotation.SuppressLint("BatteryLife")
+    private fun requestBattery() {
+        runCatching {
+            val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+            if (Build.VERSION.SDK_INT >= 23 && !pm.isIgnoringBatteryOptimizations(packageName)) {
+                startActivity(Intent(
+                    android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName")
+                ))
+            } else {
+                startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
+        }
     }
 }

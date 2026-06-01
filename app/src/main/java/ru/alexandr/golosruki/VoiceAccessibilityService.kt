@@ -43,6 +43,12 @@ class VoiceAccessibilityService : AccessibilityService() {
         overlay = OverlayController(this)
         overlay.showStatus("Сон. Скажите: Иван")
         Logger.log("ACC", "Служба спец. возможностей ПОДКЛЮЧЕНА")
+        // Автозапуск распознавания: спец.возможности система поднимает после перезагрузки сама,
+        // поэтому отсюда стартуем голосовую службу — управление доступно сразу после ребута.
+        runCatching {
+            val i = Intent(this, VoiceRecognitionService::class.java)
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
@@ -63,6 +69,8 @@ class VoiceAccessibilityService : AccessibilityService() {
     }
 
     fun execute(command: Command) {
+        // любая новая команда (кроме самого автоскролла) останавливает непрерывное листание
+        if (command !is Command.AutoScroll) stopAutoScroll()
         showStatus(command.label())
         when (command) {
             Command.Back -> performGlobalAction(GLOBAL_ACTION_BACK)
@@ -101,8 +109,10 @@ class VoiceAccessibilityService : AccessibilityService() {
             is Command.ScrollEdge -> scrollEdge(command.direction)
             Command.Paste -> paste()
             Command.TapCenter -> { val (w, h) = screenSize(); doTap(w / 2f, h / 2f, TapKind.SINGLE) }
-            is Command.CallContact -> doCall(command.number)
-            is Command.OpenApp -> openApp(command.pkg)
+            is Command.TapText -> tapByText(command.label)
+            is Command.AutoScroll -> startAutoScroll(command.direction)
+            is Command.CallContact -> { VoiceRecognitionService.instance?.speak("Звоню ${command.name}"); doCall(command.number) }
+            is Command.OpenApp -> { VoiceRecognitionService.instance?.speak("Открываю ${command.name}"); openApp(command.pkg) }
             Command.Help -> overlay.showHelp()
             Command.Pause -> VoiceRecognitionService.setPaused(true)
             Command.Resume -> VoiceRecognitionService.setPaused(false)
@@ -405,6 +415,63 @@ class VoiceAccessibilityService : AccessibilityService() {
         node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
     }
 
+    // --- Нажать кнопку по видимой надписи ---
+    private fun tapByText(label: String) {
+        val root = rootInActiveWindow ?: run { showStatus("Нет окна"); return }
+        val q = label.trim().lowercase()
+        // 1) точный/частичный поиск по тексту через системный API
+        val found = runCatching { root.findAccessibilityNodeInfosByText(label) }.getOrNull().orEmpty()
+        var target = found.firstOrNull { it.isVisibleToUser }
+            ?: found.firstOrNull()
+        // 2) запасной обход дерева: сравнить text/contentDescription
+        if (target == null) target = searchByText(root, q)
+        if (target == null) { showStatus("Не нашёл «$label»"); VoiceRecognitionService.instance?.speak("Не нашёл $label"); return }
+        val clickable = clickableAncestor(target) ?: target
+        if (!clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            val r = android.graphics.Rect(); clickable.getBoundsInScreen(r)
+            doTap(r.exactCenterX(), r.exactCenterY(), TapKind.SINGLE)
+        }
+        Logger.log("ACC", "Нажатие по надписи: «$label»")
+    }
+
+    private fun searchByText(node: AccessibilityNodeInfo?, q: String): AccessibilityNodeInfo? {
+        if (node == null) return null
+        val t = (node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")
+        if (t.lowercase().contains(q) && q.isNotBlank()) return node
+        for (i in 0 until node.childCount) {
+            val r = searchByText(node.getChild(i), q)
+            if (r != null) return r
+        }
+        return null
+    }
+
+    private fun clickableAncestor(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+        var n = node
+        var depth = 0
+        while (n != null && depth < 8) {
+            if (n.isClickable) return n
+            n = n.parent; depth++
+        }
+        return null
+    }
+
+    // --- Непрерывное листание ---
+    private var autoScrolling = false
+    private fun startAutoScroll(dir: Direction) {
+        autoScrolling = true
+        showStatus("Листаю… скажите «стоп»")
+        fun step() {
+            if (!autoScrolling) return
+            gestureScroll(dir)
+            handler.postDelayed({ step() }, 1300)
+        }
+        step()
+    }
+
+    fun stopAutoScroll() {
+        if (autoScrolling) { autoScrolling = false; Logger.log("ACC", "Автоскролл остановлен") }
+    }
+
     // --- Ввод текста ---
     private fun focusedEditable(): AccessibilityNodeInfo? {
         val root = rootInActiveWindow ?: return null
@@ -517,29 +584,32 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     // --- SOS: СМС с геолокацией + звонок ---
     private fun doSos() {
-        val number = personal.sosNumber
-        if (number.isBlank()) { showStatus("SOS-номер не задан"); return }
+        val numbers = listOf(personal.sosNumber, SettingsStore.getSosNumber2(this))
+            .map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (numbers.isEmpty()) { showStatus("SOS-номер не задан"); VoiceRecognitionService.instance?.speak("Номер помощи не задан"); return }
         val loc = lastKnownLocation()
         val mapLink = loc?.let {
-            // Яндекс.Карты используют порядок «долгота,широта»
             " Координаты: https://yandex.ru/maps/?pt=${it.longitude},${it.latitude}&z=18&l=map"
         } ?: ""
         val text = personal.sosText + mapLink
-        try {
-            val sms: SmsManager? = if (Build.VERSION.SDK_INT >= 31)
-                getSystemService(SmsManager::class.java)
-            else
-                SmsManager.getDefault()
-            if (sms != null) {
-                val parts = sms.divideMessage(text)   // длинный текст — на части
-                sms.sendMultipartTextMessage(number, null, parts, null, null)
+        VoiceRecognitionService.instance?.speak("Вызываю помощь")
+        // СМС на ВСЕ номера (эскалация)
+        for (number in numbers) {
+            try {
+                val sms: SmsManager? = if (Build.VERSION.SDK_INT >= 31)
+                    getSystemService(SmsManager::class.java) else SmsManager.getDefault()
+                if (sms != null) {
+                    val parts = sms.divideMessage(text)
+                    sms.sendMultipartTextMessage(number, null, parts, null, null)
+                    Logger.log("ACC", "SOS СМС → $number")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "SOS СМС $number: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "SOS СМС: ${e.message}")
         }
-        // через секунду — звонок
-        handler.postDelayed({ doCall(number) }, 1200)
-        showStatus("SOS отправлен")
+        // звонок первому номеру
+        handler.postDelayed({ doCall(numbers.first()) }, 1200)
+        showStatus("SOS отправлен на ${numbers.size} номер(ов)")
     }
 
     private fun lastKnownLocation(): Location? {
@@ -609,8 +679,16 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     // --- Пробуждение / разблокировка ---
     private fun doUnlock() {
+        // «привет» имеет смысл только когда экран выключен или заблокирован
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        val km = getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager
+        val screenOff = !pm.isInteractive
+        val locked = km.isKeyguardLocked
+        if (!screenOff && !locked) {
+            Logger.log("ACC", "«привет» проигнорирован — экран включён и разблокирован")
+            return
+        }
         try {
-            val pm = getSystemService(POWER_SERVICE) as PowerManager
             @Suppress("DEPRECATION")
             val wl = pm.newWakeLock(
                 PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,

@@ -63,6 +63,30 @@ object CommandParser {
             }
         }
 
+        // 0.5 Нажать по НАДПИСИ: «нажми отправить», «кликни настройки», «выбери да»
+        run {
+            val verbs = listOf("нажми", "кликни", "тапни", "выбери", "нажать", "кликнуть")
+            val verb = verbs.firstOrNull { t.startsWith("$it ") || t == it }
+            if (verb != null) {
+                val label = t.removePrefix(verb).trim()
+                val asNum = extractNumber(label)
+                when {
+                    label.isBlank() -> { /* просто «нажми» — пусть обработается ниже как тап по центру */ }
+                    asNum != null && label.split(" ").size <= 1 -> return Command.Tap(asNum)
+                    else -> return Command.TapText(label)
+                }
+            }
+        }
+
+        // 0.6 Непрерывное листание: «листай», «листай вниз/вверх», «крути», «мотай»
+        if (t.startsWith("листай") || t.startsWith("крути") || t.startsWith("мотай") || t.contains("листать")) {
+            val dir = when {
+                t.contains("вверх") || t.contains("наверх") -> Direction.UP
+                else -> Direction.DOWN
+            }
+            return Command.AutoScroll(dir)
+        }
+
         // 1. Навигация и управление
         when {
             t.contains("назад") || t.contains("выход") -> return Command.Back
@@ -81,6 +105,7 @@ object CommandParser {
             t.contains("скрой") || t.contains("убери") || t.contains("спрячь") || t.contains("отмена") -> return Command.HideOverlay
             t.contains("номера") || t.contains("кнопки") -> return Command.ShowNumbers
             t.contains("сетк") -> return Command.Grid
+            t.contains("тап") || t.contains("центр") -> return Command.TapCenter
             t.contains("ввод") || t.contains("отправ") || t.contains("энтер") -> return Command.EnterKey
             t.contains("вставь") || t.contains("вставить") -> return Command.Paste
             t.contains("выдел") -> return Command.SelectAll

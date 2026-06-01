@@ -36,14 +36,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var keepScreen = true
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager }
 
-    /** Надёжнее, чем только isMusicActive: учитывает активные аудио-сессии (API 26+). */
-    private fun isMediaPlaying(): Boolean {
-        if (audioManager.isMusicActive) return true
-        if (Build.VERSION.SDK_INT >= 26) {
-            return try { audioManager.activePlaybackConfigurations.isNotEmpty() } catch (e: Exception) { false }
-        }
-        return false
-    }
+    /** Играет ли сейчас звук. isMusicActive = true только при реальном воспроизведении. */
+    private fun isMediaPlaying(): Boolean = try { audioManager.isMusicActive } catch (e: Exception) { false }
 
     /** Экран включён (интерактивен)? */
     private fun isScreenOn(): Boolean = try {
@@ -56,6 +50,13 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var dictationDigits = false
     private val dictBuffer = StringBuilder()
     @Volatile private var bigModelActive = false
+    @Volatile private var mediaControlMode = false
+    private var mediaCode = "видео"
+    private var tts: android.speech.tts.TextToSpeech? = null
+    @Volatile private var ttsReady = false
+    private var ttsEnabled = true
+    private var confirmCalls = false
+    private var pendingCall: Pair<String, String>? = null   // имя -> номер (ожидает «да»)
 
     private val idleRunnable = Runnable {
         state = State.ASLEEP
@@ -122,6 +123,17 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         ignoreMedia = SettingsStore.getIgnoreMedia(this)
         vibrateOnWake = SettingsStore.getVibrate(this)
         keepScreen = SettingsStore.getKeepScreen(this)
+        mediaCode = SettingsStore.getMediaCode(this).lowercase().trim()
+        ttsEnabled = SettingsStore.getTts(this)
+        confirmCalls = SettingsStore.getConfirmCalls(this)
+        if (ttsEnabled) {
+            tts = android.speech.tts.TextToSpeech(this) { status ->
+                if (status == android.speech.tts.TextToSpeech.SUCCESS) {
+                    runCatching { tts?.language = java.util.Locale("ru") }
+                    ttsReady = true
+                }
+            }
+        }
         Logger.log("REC", "Старт службы. Слово активации: '$wakeWord', сон: ${idleMs / 1000}с")
         Logger.log("CFG", "Контактов: ${personal.contacts.size} ${personal.contacts.keys}; " +
             "своих команд: ${personal.customApps.size}; " +
@@ -136,6 +148,53 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     private fun cap(s: String) = s.replaceFirstChar { it.uppercase() }
+
+    private fun flushDictation() {
+        val full = dictBuffer.toString()
+        post { VoiceAccessibilityService.instance?.setFieldText(full) }
+    }
+
+    /** Диктовка обычного текста с поддержкой пунктуации и переносов. */
+    private fun applyDictation(text: String) {
+        val tokens = text.split(" ").filter { it.isNotBlank() }
+        var i = 0
+        while (i < tokens.size) {
+            val w = tokens[i]
+            val two = if (i + 1 < tokens.size) "$w ${tokens[i + 1]}" else ""
+            when {
+                two == "новая строка" || two == "новый абзац" -> { dictBuffer.append("\n"); i += 2; continue }
+                two == "восклицательный знак" -> { trimEndSpace(); dictBuffer.append("! "); i += 2; continue }
+                two == "вопросительный знак" -> { trimEndSpace(); dictBuffer.append("? "); i += 2; continue }
+                two == "с большой" -> { capNext = true; i += 2; continue }   // «с большой буквы»
+                w == "запятая" -> { trimEndSpace(); dictBuffer.append(", ") }
+                w == "точка" -> { trimEndSpace(); dictBuffer.append(". "); capNext = true }
+                w == "вопрос" -> { trimEndSpace(); dictBuffer.append("? "); capNext = true }
+                w == "двоеточие" -> { trimEndSpace(); dictBuffer.append(": ") }
+                w == "тире" || w == "дефис" -> dictBuffer.append("— ")
+                w == "пробел" -> dictBuffer.append(" ")
+                w == "буквы" -> { /* хвост от «с большой буквы» */ }
+                else -> {
+                    val word = if (capNext) w.replaceFirstChar { it.uppercase() } else w
+                    capNext = false
+                    dictBuffer.append(word).append(" ")
+                }
+            }
+            i++
+        }
+        flushDictation()
+    }
+
+    private var capNext = false
+    private fun trimEndSpace() {
+        while (dictBuffer.isNotEmpty() && dictBuffer.last() == ' ') dictBuffer.deleteCharAt(dictBuffer.length - 1)
+    }
+
+    fun speak(text: String) {
+        if (!ttsEnabled || !ttsReady) return
+        runCatching {
+            tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki")
+        }
+    }
 
     private fun vibrateTick() {
         try {
@@ -218,7 +277,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private fun startListening(grammar: Boolean) {
         val useGrammar = grammar && !bigModelActive   // большая модель статична — только свободный режим
         val rec = if (useGrammar)
-            Recognizer(model, 16000.0f, Vocabulary.buildGrammar(personal, wakeWord))
+            Recognizer(model, 16000.0f, Vocabulary.buildGrammar(personal, wakeWord, mediaCode))
         else
             Recognizer(model, 16000.0f)
         speechService = SpeechService(rec, 16000.0f)
@@ -279,18 +338,38 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             return
         }
 
-        // Во время видео/музыки: реагируем ТОЛЬКО на «слово активации + команда» (любую),
-        // чтобы звук из видео не вызывал ложных срабатываний, но при этом было полное управление.
+        // Сброс видео-режима, когда медиа перестало играть
+        if (mediaControlMode && !isMediaPlaying()) mediaControlMode = false
+
+        // Во время видео/музыки
         if (ignoreMedia && isMediaPlaying()) {
             if (text.contains(wakeWord)) {
-                val rest = stripWake(text)
-                Logger.log("MEDIA", "Активация при медиа, команда: '$rest'")
+                val rest = stripWake(text).trim()
+                // переключение ВИДЕО-РЕЖИМА по кодовому слову: «<слово> <код>»
+                if (mediaCode.isNotBlank() && (rest == mediaCode || rest.contains(mediaCode))) {
+                    mediaControlMode = !mediaControlMode
+                    if (paused) setPaused(false)
+                    resetIdle()
+                    VoiceAccessibilityService.instance?.showStatus(
+                        if (mediaControlMode) "🎬 Видео-режим ВКЛ: пауза/вверх/вниз/тап без «${cap(wakeWord)}»"
+                        else "Видео-режим выкл"
+                    )
+                    return
+                }
+                Logger.log("MEDIA", "Активация при медиа: '$rest'")
                 if (paused) setPaused(false)
                 resetIdle()
-                if (rest.isBlank()) {
-                    VoiceAccessibilityService.instance?.showStatus("${cap(wakeWord)} слушает (видео)")
+                if (rest.isBlank()) VoiceAccessibilityService.instance?.showStatus("${cap(wakeWord)} слушает (видео)")
+                else handleCommand(rest)   // полный набор: пауза/играй, номера, тап, сетка, листание
+            } else if (mediaControlMode) {
+                // ВИДЕО-РЕЖИМ: безопасный набор команд без слова активации (листать шортсы и т.п.)
+                val c = CommandParser.parseMedia(text)
+                if (c != null) {
+                    Logger.log("MEDIA", "Видео-режим: ${c.label()}")
+                    resetIdle()
+                    post { VoiceAccessibilityService.instance?.execute(c) }
                 } else {
-                    handleCommand(rest)   // полный набор: пауза/играй, номера, тап, сетка, листание шортсов
+                    Logger.log("REC", "Видео-режим: '$text' — не команда, игнор")
                 }
             } else {
                 Logger.log("REC", "Игнор (играет медиа): '$text'")
@@ -307,12 +386,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 exitDictation(); return
             }
             resetIdle()
-            val chunk = if (dictationDigits) NumberWords.toDigits(text) else text
-            if (chunk.isNotBlank()) {
-                if (!dictationDigits && dictBuffer.isNotEmpty()) dictBuffer.append(" ")
-                dictBuffer.append(chunk)
-                val full = dictBuffer.toString()
-                post { VoiceAccessibilityService.instance?.setFieldText(full) }
+            if (dictationDigits) {
+                val chunk = NumberWords.toDigits(text)
+                if (chunk.isNotBlank()) { dictBuffer.append(chunk); flushDictation() }
+            } else {
+                applyDictation(text)
             }
             return
         }
@@ -353,6 +431,25 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     private fun handleCommand(text: String) {
+        // Ожидание подтверждения звонка
+        pendingCall?.let { pc ->
+            when {
+                text.contains("да") || text.contains("звони") || text.contains("подтвержда") ||
+                    text.contains("ага") || text.contains("давай") || text.contains("вызывай") -> {
+                    pendingCall = null
+                    Logger.log("CMD", "Звонок подтверждён: ${pc.first}")
+                    post { VoiceAccessibilityService.instance?.execute(Command.CallContact(pc.first, pc.second)) }
+                    return
+                }
+                text.contains("нет") || text.contains("отмена") || text.contains("стоп") || text.contains("не надо") -> {
+                    pendingCall = null
+                    speak("Отменено")
+                    VoiceAccessibilityService.instance?.showStatus("Звонок отменён")
+                    return
+                }
+                else -> { pendingCall = null }  // иначе сбрасываем и обрабатываем как обычную команду
+            }
+        }
         if (text.contains("повтори")) {
             lastCmdText?.let { last ->
                 Logger.log("CMD", "Повтор: $last")
@@ -364,6 +461,16 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         lastCmdText = text
         val cmd = CommandParser.parse(text, personal)
         Logger.log("CMD", "Команда: ${cmd.label()}")
+
+        // Подтверждение звонка (если включено в настройках)
+        if (confirmCalls && cmd is Command.CallContact) {
+            pendingCall = cmd.name to cmd.number
+            VoiceAccessibilityService.instance?.showStatus("Звоню ${cmd.name}? Скажите «да» или «нет»")
+            speak("Звоню ${cmd.name}? Скажите да или нет")
+            handler.postDelayed({ if (pendingCall != null) { pendingCall = null; Logger.log("CMD", "Подтверждение истекло") } }, 15000)
+            return
+        }
+
         if (cmd is Command.Unknown) {
             when {
                 text.contains("позвони") || text.contains("набери") -> {
@@ -392,8 +499,15 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         }
     }
 
-    override fun onError(e: Exception?) { Logger.log("REC", "Ошибка: ${e?.message}") }
-    override fun onTimeout() {}
+    override fun onError(e: Exception?) {
+        Logger.log("REC", "Ошибка распознавания: ${e?.message} — перезапуск через 1с")
+        // watchdog: восстанавливаем прослушивание
+        handler.postDelayed({ if (model != null) restart(grammar = !bigModelActive) }, 1000)
+    }
+    override fun onTimeout() {
+        // перезапускаем поток распознавания, чтобы не «засыпал» навсегда
+        if (model != null) restart(grammar = !bigModelActive)
+    }
 
     override fun onDestroy() {
         super.onDestroy()
@@ -401,6 +515,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         runCatching { speechService?.stop() }
         runCatching { speechService?.shutdown() }
         model?.close()
+        runCatching { tts?.stop(); tts?.shutdown() }
         instance = null
     }
 }

@@ -41,6 +41,16 @@ object SettingsStore {
     fun getBigModel(ctx: Context): Boolean = p(ctx).getBoolean("big_model", false)
     fun setBigModel(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("big_model", v).apply()
 
+    fun getMediaCode(ctx: Context): String = p(ctx).getString("media_code", "видео")?.ifBlank { "видео" } ?: "видео"
+    fun setMediaCode(ctx: Context, v: String) = p(ctx).edit().putString("media_code", v.trim()).apply()
+
+    fun getTts(ctx: Context): Boolean = p(ctx).getBoolean("tts", true)
+    fun setTts(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("tts", v).apply()
+    fun getConfirmCalls(ctx: Context): Boolean = p(ctx).getBoolean("confirm_calls", false)
+    fun setConfirmCalls(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("confirm_calls", v).apply()
+    fun getSosNumber2(ctx: Context): String = p(ctx).getString("sos_num2", "") ?: ""
+    fun setSosNumber2(ctx: Context, v: String) = p(ctx).edit().putString("sos_num2", v).apply()
+
     /** Контакты: имя(дат. падеж) -> номер. */
     fun getContacts(ctx: Context): Map<String, String> {
         val raw = p(ctx).getString("contacts", null) ?: return emptyMap()

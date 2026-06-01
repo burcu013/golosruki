@@ -70,12 +70,9 @@ class ModelDownloadService : Service() {
             handler.post {
                 nm.cancel(NID)
                 if (ok) {
-                    SettingsStore.setBigModel(this, true)   // включаем автоматически
                     nm.notify(NID_DONE, buildDone())
-                    // перезагружаем модель в голосовой службе (если она запущена)
-                    val r = Intent(this, VoiceRecognitionService::class.java)
-                        .setAction(VoiceRecognitionService.ACTION_RELOAD)
-                    runCatching { startService(r) }
+                    // НЕ включаем автоматически: большая модель медленнее на телефоне.
+                    // Пользователь сам включит галочкой в Настройках, если нужно.
                 }
                 stopForegroundCompat(); stopSelf()
             }
@@ -133,8 +130,8 @@ class ModelDownloadService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return base()
-            .setContentTitle("Большая модель готова ✅")
-            .setContentText("Точное распознавание включено. Подробности — в Гайде.")
+            .setContentTitle("Большая модель загружена ✅")
+            .setContentText("Включить можно в Настройках (если нужна). Подробности — в Гайде.")
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setAutoCancel(true)
             .setContentIntent(pi)

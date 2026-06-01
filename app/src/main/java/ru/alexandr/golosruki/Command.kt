@@ -40,6 +40,8 @@ sealed class Command {
     data class ScrollEdge(val direction: Direction) : Command() // листать до конца
     object Paste : Command()                  // вставить из буфера
     object TapCenter : Command()              // тап по центру экрана (пауза/плей в плеерах)
+    data class TapText(val label: String) : Command()        // нажать кнопку по надписи
+    data class AutoScroll(val direction: Direction) : Command() // непрерывное листание
     data class CallContact(val name: String, val number: String) : Command()
     data class OpenApp(val name: String, val pkg: String) : Command()
     object Help : Command()
@@ -84,6 +86,8 @@ sealed class Command {
         is ScrollEdge -> "До конца ${direction.name.lowercase()}"
         Paste -> "Вставить"
         TapCenter -> "Тап по центру"
+        is TapText -> "Нажать «$label»"
+        is AutoScroll -> "Листать ${direction.name.lowercase()}"
         is CallContact -> "Звоню: $name"
         is OpenApp -> "Открываю: $name"
         Help -> "Помощь"

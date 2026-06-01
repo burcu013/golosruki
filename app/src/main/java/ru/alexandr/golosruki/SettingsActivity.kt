@@ -14,6 +14,10 @@ import androidx.activity.ComponentActivity
 class SettingsActivity : ComponentActivity() {
 
     private lateinit var wake: EditText
+    private lateinit var mediaCodeField: EditText
+    private lateinit var ttsCheck: android.widget.CheckBox
+    private lateinit var confirmCheck: android.widget.CheckBox
+    private lateinit var sosNum2: EditText
     private lateinit var idle: EditText
     private lateinit var sosNum: EditText
     private lateinit var sosTxt: EditText
@@ -62,6 +66,19 @@ class SettingsActivity : ComponentActivity() {
             isChecked = SettingsStore.getKeepScreen(this@SettingsActivity)
         }
         a.addView(keepScreenCheck)
+        a.addView(UiKit.body(this, "Кодовое слово видео-режима (для YouTube/шортсов). Скажите «<слово активации> <код>» во время видео — включится листание/пауза БЕЗ повторения слова активации; повторите — выключится:"))
+        mediaCodeField = field(InputType.TYPE_CLASS_TEXT).also { it.setText(SettingsStore.getMediaCode(this)) }
+        a.addView(mediaCodeField)
+        ttsCheck = android.widget.CheckBox(this).apply {
+            text = "Голосовые подтверждения (озвучивание действий)"; textSize = 15f
+            isChecked = SettingsStore.getTts(this@SettingsActivity)
+        }
+        a.addView(ttsCheck)
+        confirmCheck = android.widget.CheckBox(this).apply {
+            text = "Спрашивать подтверждение перед звонком"; textSize = 15f
+            isChecked = SettingsStore.getConfirmCalls(this@SettingsActivity)
+        }
+        a.addView(confirmCheck)
         col.addView(a)
 
         // Калибровка свайпов
@@ -88,6 +105,9 @@ class SettingsActivity : ComponentActivity() {
         s.addView(UiKit.body(this, "Номер для вызова помощи:"))
         sosNum = field(InputType.TYPE_CLASS_PHONE).also { it.setText(SettingsStore.getSosNumber(this)) }
         s.addView(sosNum)
+        s.addView(UiKit.body(this, "Второй номер (эскалация) — СМС уйдёт на оба:"))
+        sosNum2 = field(InputType.TYPE_CLASS_PHONE).also { it.setText(SettingsStore.getSosNumber2(this)) }
+        s.addView(sosNum2)
         s.addView(UiKit.body(this, "Текст SOS-сообщения:"))
         sosTxt = field(InputType.TYPE_CLASS_TEXT).also {
             val t = SettingsStore.getSosText(this)
@@ -138,7 +158,7 @@ class SettingsActivity : ComponentActivity() {
         // --- Точность распознавания (большая модель) ---
         val mc = UiKit.card(this)
         mc.addView(UiKit.sectionHeader(this, "Точность распознавания"))
-        mc.addView(UiKit.body(this, "Большая модель (≈1.8 ГБ) распознаёт имена и редкие слова заметно лучше. Загрузка идёт В ФОНЕ со статусом в шторке: при обрыве связи докачивается автоматически с места обрыва, можно «Отменить». Нужен интернет, ~4 ГБ места и больше оперативной памяти. После загрузки включается сама."))
+        mc.addView(UiKit.body(this, "Большая модель (≈1.8 ГБ) — это СЕРВЕРНАЯ модель. На телефоне она работает МЕДЛЕННЕЕ (заметная задержка отклика) и для коротких команд часто не точнее малой. Рекомендуется для диктовки длинного текста, а для управления командами лучше малая (быстрее и стабильнее). Если включили и стало тормозить — снимите галочку. Загрузка в фоне, с авто-докачкой и отменой; ~4 ГБ места."))
         bigModelCheck = android.widget.CheckBox(this).apply {
             text = "Использовать большую модель"; textSize = 15f
             isChecked = SettingsStore.getBigModel(this@SettingsActivity)
@@ -224,6 +244,10 @@ class SettingsActivity : ComponentActivity() {
 
     private fun save() {
         SettingsStore.setWake(this, wake.text.toString().ifBlank { "иван" })
+        SettingsStore.setMediaCode(this, mediaCodeField.text.toString().ifBlank { "видео" })
+        SettingsStore.setTts(this, ttsCheck.isChecked)
+        SettingsStore.setConfirmCalls(this, confirmCheck.isChecked)
+        SettingsStore.setSosNumber2(this, sosNum2.text.toString())
         SettingsStore.setIdle(this, idle.text.toString().toIntOrNull()?.coerceIn(10, 300) ?: 30)
         SettingsStore.setSosNumber(this, sosNum.text.toString())
         SettingsStore.setSosText(this, sosTxt.text.toString())

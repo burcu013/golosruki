@@ -67,6 +67,16 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.removeCallbacks(mediaModeOff)
         handler.postDelayed(mediaModeOff, 90_000L)
     }
+    private fun toggleMediaMode() {
+        mediaControlMode = !mediaControlMode
+        if (mediaControlMode) armMediaMode() else handler.removeCallbacks(mediaModeOff)
+        if (paused) setPaused(false)
+        resetIdle()
+        VoiceAccessibilityService.instance?.showStatus(
+            if (mediaControlMode) "🎵 Медиа-режим ВКЛ: пауза/играй/треки/листание без «${cap(wakeWord)}»"
+            else "Медиа-режим выкл"
+        )
+    }
     private var tts: android.speech.tts.TextToSpeech? = null
     @Volatile private var ttsReady = false
     @Volatile private var isSpeaking = false
@@ -161,9 +171,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 }
             }
             tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-                override fun onStart(id: String?) { isSpeaking = true }
-                override fun onDone(id: String?) { handler.postDelayed({ isSpeaking = false }, 400) }
-                @Deprecated("deprecated") override fun onError(id: String?) { handler.postDelayed({ isSpeaking = false }, 400) }
+                override fun onStart(id: String?) { isSpeaking = true; runCatching { speechService?.setPause(true) } }
+                override fun onDone(id: String?) { scheduleResume(500) }
+                @Deprecated("deprecated") override fun onError(id: String?) { scheduleResume(500) }
             })
         }
         Logger.log("REC", "Старт службы. Слово активации: '$wakeWord', сон: ${idleMs / 1000}с")
@@ -221,15 +231,26 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         while (dictBuffer.isNotEmpty() && dictBuffer.last() == ' ') dictBuffer.deleteCharAt(dictBuffer.length - 1)
     }
 
+    private val resumeAfterSpeak = Runnable {
+        isSpeaking = false
+        runCatching { speechService?.setPause(false) }
+        Logger.log("REC", "Распознавание возобновлено после речи")
+    }
+    private fun scheduleResume(delay: Long) {
+        handler.removeCallbacks(resumeAfterSpeak)
+        handler.postDelayed(resumeAfterSpeak, delay)
+    }
+
     fun speak(text: String) {
         if (!ttsEnabled || !ttsReady) return
-        isSpeaking = true   // глушим распознавание, пока говорит синтезатор (анти-петля)
+        // ПОЛНОСТЬЮ глушим распознавание на время речи: Vosk не копит звук синтезатора (анти-петля)
+        isSpeaking = true
+        runCatching { speechService?.setPause(true) }
         runCatching {
             tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki")
         }
-        // страховка: если движок не сообщит об окончании — снимем флаг по времени
-        val ms = 1500L + text.length * 90L
-        handler.postDelayed({ isSpeaking = false }, ms)
+        // страховка, если движок не сообщит об окончании
+        scheduleResume(1800L + text.length * 90L)
     }
 
     private fun vibrateTick() {
@@ -424,20 +445,15 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
         // Во время видео/музыки ИЛИ пока активен медиа-режим (держится даже на паузе)
         if (ignoreMedia && (isMediaPlaying() || mediaControlMode)) {
-            if (text.contains(wakeWord)) {
-                val rest = stripWake(text).trim()
-                // переключение МЕДИА-РЕЖИМА по кодовому слову — только при ТОЧНОМ совпадении
-                if (mediaCode.isNotBlank() && rest == mediaCode) {
-                    mediaControlMode = !mediaControlMode
-                    if (mediaControlMode) armMediaMode() else handler.removeCallbacks(mediaModeOff)
-                    if (paused) setPaused(false)
-                    resetIdle()
-                    VoiceAccessibilityService.instance?.showStatus(
-                        if (mediaControlMode) "🎵 Медиа-режим ВКЛ: пауза/играй/треки/листание без «${cap(wakeWord)}»"
-                        else "Медиа-режим выкл"
-                    )
-                    return
-                }
+            val hasWake = text.contains(wakeWord)
+            val rest = if (hasWake) stripWake(text).trim() else text.trim()
+            // переключение МЕДИА-РЕЖИМА: «<слово> медиа» ИЛИ просто «медиа»
+            // (распознаватель часто дробит «иван медиа» на две части — ловим обе)
+            if (mediaCode.isNotBlank() && rest == mediaCode) {
+                toggleMediaMode()
+                return
+            }
+            if (hasWake) {
                 Logger.log("MEDIA", "Активация при медиа: '$rest'")
                 if (paused) setPaused(false)
                 resetIdle()

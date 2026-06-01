@@ -43,7 +43,7 @@ class OverlayController(private val context: Context) {
         ensureView(); view?.setTargets(list.map { OverlayView.Target(it.first, it.second) }, true)
     }
     fun showHelp() {
-        showStatus("Иван · назад · домой · номера · нажми N · сетка · позвони X · открой X · сос · диктовка")
+        showStatus("Команды: номера · нажми N · нажми <надпись> · вниз/чуть вниз · открой X · позвони X · медиа · диктовка · сос")
     }
     fun clearTargets() { view?.clearTargets() }
 

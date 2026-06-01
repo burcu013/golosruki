@@ -74,11 +74,11 @@ class VoiceAccessibilityService : AccessibilityService() {
         if (command !is Command.Unlock) showStatus(command.label())
         when (command) {
             Command.Back -> performGlobalAction(GLOBAL_ACTION_BACK)
-            Command.Home -> performGlobalAction(GLOBAL_ACTION_HOME)
+            Command.Home -> { performGlobalAction(GLOBAL_ACTION_HOME); VoiceRecognitionService.instance?.clearMediaMode() }
             Command.Recents -> performGlobalAction(GLOBAL_ACTION_RECENTS)
             Command.Notifications -> performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
             Command.QuickSettings -> performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
-            Command.Lock -> if (Build.VERSION.SDK_INT >= 28) performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
+            Command.Lock -> { VoiceRecognitionService.instance?.clearMediaMode(); if (Build.VERSION.SDK_INT >= 28) performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) }
             Command.Screenshot -> if (Build.VERSION.SDK_INT >= 28) performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT)
             Command.Unlock -> doUnlock()
             Command.Sos -> doSos()
@@ -103,6 +103,7 @@ class VoiceAccessibilityService : AccessibilityService() {
             is Command.TypeText -> typeText(command.text)
             Command.DeleteText -> deleteText()
             Command.SelectAll -> selectAll()
+            Command.CopyText -> copySelection()
             Command.ClearText -> clearText()
             Command.EnterKey -> pressEnter()
             is Command.SwipeItem -> swipeItem(command.number, command.direction)
@@ -275,8 +276,8 @@ class VoiceAccessibilityService : AccessibilityService() {
     /** После обычного тапа — убрать наложение; после долгого — перенумеровать появившееся меню. */
     private fun afterTap(kind: TapKind) {
         if (kind == TapKind.LONG) {
-            resetOverlay()
-            handler.postDelayed({ showNumbers() }, 650)  // успеть пронумеровать контекстное меню
+            // ждём появления контекстного меню и нумеруем его (с запасом по времени)
+            handler.postDelayed({ showNumbers() }, 900)
         } else {
             resetOverlay()
         }
@@ -287,16 +288,14 @@ class VoiceAccessibilityService : AccessibilityService() {
     /** Нажатие в точке: сначала прямой клик по элементу (надёжно, без «долгого нажатия»),
      *  иначе — жест по координатам. */
     private fun tapAt(x: Float, y: Float, kind: TapKind) {
-        if (kind != TapKind.DOUBLE) {
+        // Долгое нажатие — только жестом (реальное удержание; node-действие срабатывает слишком коротко)
+        if (kind == TapKind.SINGLE) {
             val node = clickableNodeAt(x.toInt(), y.toInt())
             if (node != null) {
-                val action = if (kind == TapKind.LONG)
-                    AccessibilityNodeInfo.ACTION_LONG_CLICK
-                else AccessibilityNodeInfo.ACTION_CLICK
-                if (node.performAction(action)) { Logger.log("ACC", "Клик по элементу"); return }
+                if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) { Logger.log("ACC", "Клик по элементу"); return }
             }
         }
-        doTap(x, y, kind)   // запасной — жест по координатам
+        doTap(x, y, kind)   // LONG/DOUBLE и запасной — жест по координатам
     }
 
     /** Самый маленький (самый точный) кликабельный элемент, содержащий точку. */
@@ -371,7 +370,7 @@ class VoiceAccessibilityService : AccessibilityService() {
         val p = Path().apply { moveTo(x, y); lineTo(x, y) }
         when (kind) {
             TapKind.SINGLE -> gesture(p, 50)
-            TapKind.LONG -> gesture(p, 700)
+            TapKind.LONG -> gesture(p, SettingsStore.getLongPressMs(this).toLong())
             TapKind.DOUBLE -> { gesture(p, 50); handler.postDelayed({ gesture(Path().apply { moveTo(x, y); lineTo(x, y) }, 50) }, 180) }
         }
     }
@@ -543,6 +542,24 @@ class VoiceAccessibilityService : AccessibilityService() {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText)
         }
         node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    private fun copySelection() {
+        val node = focusedEditable() ?: run { showStatus("Нет поля ввода"); VoiceRecognitionService.instance?.speak("Нет поля ввода"); return }
+        // если ничего не выделено — выделим всё, затем копируем
+        val selStart = node.textSelectionStart
+        val selEnd = node.textSelectionEnd
+        if (selStart < 0 || selEnd < 0 || selStart == selEnd) {
+            val len = node.text?.length ?: 0
+            val args = Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, len)
+            }
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
+        }
+        val ok = node.performAction(AccessibilityNodeInfo.ACTION_COPY)
+        showStatus(if (ok) "Скопировано" else "Не удалось скопировать")
+        if (ok) VoiceRecognitionService.instance?.speak("Скопировано")
     }
 
     private fun selectAll() {

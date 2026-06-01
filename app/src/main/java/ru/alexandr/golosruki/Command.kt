@@ -34,6 +34,7 @@ sealed class Command {
     data class TypeText(val text: String) : Command()
     object DeleteText : Command()
     object SelectAll : Command()              // выделить всё в поле
+    object CopyText : Command()               // копировать выделенное
     object ClearText : Command()              // очистить поле
     object EnterKey : Command()
     data class SwipeItem(val number: Int, val direction: Direction) : Command()  // свайп элемента по номеру
@@ -83,6 +84,7 @@ sealed class Command {
         is TypeText -> "Ввод: $text"
         DeleteText -> "Удаление"
         SelectAll -> "Выделить всё"
+        CopyText -> "Копировать"
         ClearText -> "Очистка поля"
         EnterKey -> "Ввод (Enter)"
         is SwipeItem -> "Свайп $number ${direction.name.lowercase()}"

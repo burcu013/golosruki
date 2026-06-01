@@ -53,6 +53,8 @@ object SettingsStore {
     fun setMediaCode(ctx: Context, v: String) = p(ctx).edit().putString("media_code", v.trim()).apply()
     fun getMediaWindowSec(ctx: Context): Int = p(ctx).getInt("media_window", 4)
     fun setMediaWindowSec(ctx: Context, v: Int) = p(ctx).edit().putInt("media_window", v.coerceIn(2, 10)).apply()
+    fun getLongPressMs(ctx: Context): Int = p(ctx).getInt("longpress_ms", 1000)
+    fun setLongPressMs(ctx: Context, v: Int) = p(ctx).edit().putInt("longpress_ms", v.coerceIn(500, 3000)).apply()
 
     fun getTts(ctx: Context): Boolean = p(ctx).getBoolean("tts", true)
     fun setTts(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("tts", v).apply()

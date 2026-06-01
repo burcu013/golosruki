@@ -36,6 +36,7 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var startUp: EditText
     private lateinit var startLeft: EditText
     private lateinit var startRight: EditText
+    private lateinit var longPressField: EditText
     private fun labeledNum(box: LinearLayout, label: String, value: Int): EditText {
         box.addView(UiKit.body(this, label))
         val f = field(InputType.TYPE_CLASS_NUMBER).also { it.setText(value.toString()) }
@@ -146,6 +147,9 @@ class SettingsActivity : ComponentActivity() {
         startUp = labeledNum(cal, "Старт «вверх» (снизу ↑):", SettingsStore.getSwipeStart(this, Direction.UP))
         startLeft = labeledNum(cal, "Старт «влево» (справа ←):", SettingsStore.getSwipeStart(this, Direction.LEFT))
         startRight = labeledNum(cal, "Старт «вправо» (слева →):", SettingsStore.getSwipeStart(this, Direction.RIGHT))
+        cal.addView(UiKit.body(this, "Длительность долгого нажатия (мс), 500–3000:"))
+        longPressField = field(InputType.TYPE_CLASS_NUMBER).also { it.setText(SettingsStore.getLongPressMs(this).toString()) }
+        cal.addView(longPressField)
         col.addView(cal)
 
         val s = UiKit.card(this)
@@ -385,6 +389,7 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setSwipeStart(this, Direction.UP, startUp.text.toString().toIntOrNull() ?: 70)
         SettingsStore.setSwipeStart(this, Direction.LEFT, startLeft.text.toString().toIntOrNull() ?: 70)
         SettingsStore.setSwipeStart(this, Direction.RIGHT, startRight.text.toString().toIntOrNull() ?: 30)
+        SettingsStore.setLongPressMs(this, longPressField.text.toString().toIntOrNull() ?: 1000)
 
         val contacts = mutableMapOf<String, String>()
         for (i in nameFields.indices) {

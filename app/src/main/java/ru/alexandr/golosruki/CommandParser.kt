@@ -79,8 +79,8 @@ object CommandParser {
             }
         }
 
-        // 0.6 Непрерывное листание: «листай», «листай вниз/вверх», «крути», «мотай»
-        if (t.startsWith("листай") || t.startsWith("крути") || t.startsWith("мотай") || t.contains("листать")) {
+        // 0.6 Непрерывное листание: «листай/листать/листа», «крути», «мотай» (распознаётся по-разному)
+        if (t.contains("листа") || t.startsWith("крути") || t.contains("мотай") || t.contains("пролист")) {
             val dir = when {
                 t.contains("вверх") || t.contains("наверх") -> Direction.UP
                 else -> Direction.DOWN
@@ -111,6 +111,7 @@ object CommandParser {
             t.contains("тап") || t.contains("центр") -> return Command.TapCenter
             t.contains("ввод") || t.contains("отправ") || t.contains("энтер") -> return Command.EnterKey
             t.contains("вставь") || t.contains("вставить") -> return Command.Paste
+            t.contains("копир") -> return Command.CopyText
             t.contains("выдел") -> return Command.SelectAll
             t.contains("очист") -> return Command.ClearText
             (t.contains("удали") || t.contains("стер") || t.contains("сотри")) && t.contains("всё") -> return Command.ClearText
@@ -183,7 +184,9 @@ object CommandParser {
 
     fun parseMedia(raw: String): Command? {
         val t = raw.lowercase()
+        val volN = if (t.contains("громкость")) extractNumber(t) else null
         return when {
+            volN != null && volN in 1..10 -> Command.SetVolume(volN)
             t.contains("громче") -> Command.VolumeUp
             t.contains("тише") -> Command.VolumeDown
             t.contains("без звука") || t.contains("выключи звук") -> Command.VolumeMute

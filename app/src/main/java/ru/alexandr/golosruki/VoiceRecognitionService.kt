@@ -67,6 +67,14 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.removeCallbacks(mediaModeOff)
         handler.postDelayed(mediaModeOff, 90_000L)
     }
+    /** Принудительно выключить медиа-режим (выход из приложения, блокировка). */
+    fun clearMediaMode() {
+        if (mediaControlMode) {
+            mediaControlMode = false
+            handler.removeCallbacks(mediaModeOff)
+            Logger.log("MEDIA", "Медиа-режим выключен (выход/блокировка)")
+        }
+    }
     private fun toggleMediaMode() {
         mediaControlMode = !mediaControlMode
         if (mediaControlMode) armMediaMode() else handler.removeCallbacks(mediaModeOff)

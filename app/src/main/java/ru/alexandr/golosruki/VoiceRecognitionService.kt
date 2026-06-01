@@ -24,7 +24,9 @@ import org.vosk.android.SpeechService
  */
 class VoiceRecognitionService : Service(), RecognitionListener {
 
-    private var model: Model? = null
+    private var model: Model? = null        // малая модель — команды (грамматика), всегда загружена
+    private var bigModel: Model? = null     // большая модель — только для диктовки, грузится лениво
+    @Volatile private var bigLoading = false
     private var speechService: SpeechService? = null
     private lateinit var personal: PersonalConfig
     private val handler = Handler(Looper.getMainLooper())
@@ -49,7 +51,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var dictation = false
     @Volatile private var dictationDigits = false
     private val dictBuffer = StringBuilder()
-    @Volatile private var bigModelActive = false
+    @Volatile private var bigForDictation = false   // большая модель доступна и включена для диктовки
     @Volatile private var mediaControlMode = false
     private var mediaCode = "медиа"
     @Volatile private var screenOffMedia = false
@@ -107,14 +109,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     /** Перезагрузка модели (например, после скачивания большой). */
     fun reloadModel() {
-        Logger.log("REC", "Перезагрузка модели")
-        runCatching { speechService?.stop() }
-        runCatching { speechService?.shutdown() }
-        speechService = null
-        runCatching { model?.close() }
-        model = null
-        initModel()
-        VoiceAccessibilityService.instance?.showStatus("Модель переключена")
+        Logger.log("REC", "Обновление доступности большой модели")
+        bigForDictation = SettingsStore.getBigModel(this) && ModelDownloader.isReady(this)
+        // если большую отключили/удалили — освобождаем память
+        if (!bigForDictation) { runCatching { bigModel?.close() }; bigModel = null }
+        if (!dictation) restartListening()   // команды продолжают на малой
+        VoiceAccessibilityService.instance?.showStatus("Настройки модели обновлены")
     }
 
     /** Полный сброс: снять паузу/диктовку, разбудить, перезапустить распознавание. */
@@ -123,7 +123,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         dictation = false
         setPaused(false)
         state = State.AWAKE
-        if (model != null) restart(grammar = true)
+        if (model != null) restartListening()
         resetIdle()
         VoiceAccessibilityService.instance?.keepScreenOn(true)
         refreshNotification()
@@ -295,14 +295,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private fun initModel() {
         Thread {
             try {
-                Logger.log("REC", "Установка модели…")
-                val useBig = SettingsStore.getBigModel(this) && ModelDownloader.isReady(this)
-                val path = if (useBig) ModelDownloader.resolveModelDir(this)!! else ModelInstaller.ensureModel(this)
-                bigModelActive = useBig
-                Logger.log("MODEL", if (useBig) "Большая модель: $path" else "Малая модель: $path")
+                Logger.log("REC", "Установка модели команд (малая)…")
+                bigForDictation = SettingsStore.getBigModel(this) && ModelDownloader.isReady(this)
+                val path = ModelInstaller.ensureModel(this)   // малая модель — всегда для команд
                 val m = Model(path)
-                Logger.log("REC", "Модель загружена, запуск прослушивания")
-                handler.post { model = m; startListening(grammar = true); refreshNotification() }
+                Logger.log("MODEL", "Малая модель: $path (большая для диктовки=${bigForDictation})")
+                handler.post { model = m; restartListening(); refreshNotification() }
             } catch (e: Exception) {
                 Logger.log("REC", "Ошибка модели: ${e.message}")
                 handler.post { VoiceAccessibilityService.instance?.showStatus("Ошибка модели: ${e.message}") }
@@ -310,32 +308,51 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         }.start()
     }
 
-    private fun startListening(grammar: Boolean) {
-        val useGrammar = grammar && !bigModelActive   // большая модель статична — только свободный режим
-        val rec = if (useGrammar)
-            Recognizer(model, 16000.0f, Vocabulary.buildGrammar(personal, wakeWord, mediaCode))
-        else
-            Recognizer(model, 16000.0f)
-        speechService = SpeechService(rec, 16000.0f)
-        speechService?.startListening(this)
-        Logger.log("REC", "Слушаю (грамматика=$useGrammar)")
-    }
-
-    private fun restart(grammar: Boolean) {
+    /** Перезапуск распознавателя под текущий режим: команды → малая+грамматика; диктовка → большая (если есть) свободно. */
+    private fun restartListening() {
         runCatching { speechService?.stop() }
         runCatching { speechService?.shutdown() }
         speechService = null
-        handler.postDelayed({ startListening(grammar) }, 200)
+        handler.postDelayed({
+            val m = model ?: return@postDelayed
+            val rec = if (dictation) {
+                val dm = if (bigForDictation && bigModel != null) bigModel!! else m
+                Recognizer(dm, 16000.0f)
+            } else {
+                Recognizer(m, 16000.0f, Vocabulary.buildGrammar(personal, wakeWord, mediaCode))
+            }
+            speechService = SpeechService(rec, 16000.0f)
+            speechService?.startListening(this)
+            Logger.log("REC", "Слушаю (диктовка=$dictation, большая=${dictation && bigForDictation && bigModel != null})")
+        }, 180)
     }
 
     fun enterDictation(digits: Boolean = false) {
         dictation = true
         dictationDigits = digits
         dictBuffer.setLength(0)
+        // лениво подгружаем большую модель для текста (один раз), команды это не тормозит
+        if (bigForDictation && bigModel == null && !bigLoading) {
+            bigLoading = true
+            VoiceAccessibilityService.instance?.showStatus("Готовлю модель диктовки…")
+            Thread {
+                val loaded = runCatching { Model(ModelDownloader.resolveModelDir(this)!!) }.getOrNull()
+                handler.post {
+                    bigLoading = false
+                    if (loaded != null) {
+                        bigModel = loaded
+                        Logger.log("MODEL", "Большая модель загружена для диктовки")
+                        if (dictation) restartListening()   // переключиться на неё, если ещё диктуем
+                    } else {
+                        Logger.log("MODEL", "Не удалось загрузить большую — диктуем на малой")
+                    }
+                }
+            }.start()
+        }
         val hint = if (digits) "Диктовка цифрами: говорите номер, «готово» — выход"
         else "Диктовка: говорите текст, «готово» — выход"
         VoiceAccessibilityService.instance?.showStatus(hint)
-        restart(grammar = false)
+        restartListening()   // пока (или если без большой) — свободный режим на малой
         resetIdle(); refreshNotification()
     }
 
@@ -344,7 +361,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         dictationDigits = false
         dictBuffer.setLength(0)
         VoiceAccessibilityService.instance?.showStatus("Команды активны")
-        restart(grammar = true)
+        restartListening()   // обратно на малую + грамматику (быстро)
         resetIdle(); refreshNotification()
     }
 
@@ -566,12 +583,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     override fun onError(e: Exception?) {
         Logger.log("REC", "Ошибка распознавания: ${e?.message} — перезапуск через 1с")
-        // watchdog: восстанавливаем прослушивание
-        handler.postDelayed({ if (model != null) restart(grammar = !bigModelActive) }, 1000)
+        handler.postDelayed({ if (model != null) restartListening() }, 1000)
     }
     override fun onTimeout() {
-        // перезапускаем поток распознавания, чтобы не «засыпал» навсегда
-        if (model != null) restart(grammar = !bigModelActive)
+        if (model != null) restartListening()
     }
 
     override fun onDestroy() {
@@ -580,6 +595,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         runCatching { speechService?.stop() }
         runCatching { speechService?.shutdown() }
         model?.close()
+        runCatching { bigModel?.close() }; bigModel = null
         runCatching { tts?.stop(); tts?.shutdown() }
         instance = null
     }

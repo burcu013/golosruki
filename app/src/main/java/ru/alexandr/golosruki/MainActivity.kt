@@ -51,13 +51,14 @@ class MainActivity : ComponentActivity() {
         val diag = UiKit.card(this)
         diag.addView(UiKit.sectionHeader(this, "Диагностика"))
         diag.addView(UiKit.row2(this,
-            UiKit.tile(this, "🎤", "Тест микро") { open(TestActivity::class.java) },
+            UiKit.tile(this, "🎤", "Тест и обучение") { open(TestActivity::class.java) },
             UiKit.tile(this, "📋", "Логи") { open(LogActivity::class.java) }
         ))
-        diag.addView(UiKit.row2(this,
-            UiKit.tile(this, "🛠", "Супер-режим", R.drawable.btn_amber) { open(DevModeActivity::class.java) },
-            UiKit.tile(this, "🎯", "Дообучение") { open(TestActivity::class.java) }
-        ))
+        diag.addView(UiKit.tile(this, "🛠", "Супер-режим", R.drawable.btn_amber) { open(DevModeActivity::class.java) }.apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = UiKit.dp(this@MainActivity, 10) }
+        })
         col.addView(diag)
 
         col.addView(buildDevBanner())
@@ -183,7 +184,7 @@ class MainActivity : ComponentActivity() {
         card.addView(UiKit.sectionHeader(this, "О приложении"))
         card.addView(UiKit.body(this, "ГолосРуки — голосовое управление смартфоном для людей с ограниченными возможностями."))
         card.addView(UiKit.body(this, "Офлайн-распознавание речи, без интернета и без передачи данных."))
-        card.addView(UiKit.body(this, "Версия 6.5 • Разработчик: Донбасс Реклама"))
+        card.addView(UiKit.body(this, "Версия 6.7 • Разработчик: Донбасс Реклама"))
         return card
     }
 

@@ -44,7 +44,7 @@ object CommandParser {
         // 0.2 Диктовка / ввод текста — только через свободный распознаватель
         if (t.contains("цифр") || t.contains("номер телефона")) return Command.DictationDigits
         if (t.contains("диктовка") || t.contains("печатать") ||
-            t.contains("напиши") || t.contains("введи") || t.contains("набрать текст"))
+            t.contains("напиши") || t.contains("написа") || t.contains("введи") || t.contains("набрать текст"))
             return Command.Dictation
 
         // 0.3 Персональные: позвонить

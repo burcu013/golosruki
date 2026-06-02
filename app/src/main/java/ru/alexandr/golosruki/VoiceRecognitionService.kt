@@ -98,8 +98,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     /** Активный разговор: сотовый (MODE_IN_CALL) или мессенджер (MODE_IN_COMMUNICATION), но не наш BT-SCO. */
     private fun inCall(): Boolean = try {
         val m = audioManager.mode
+        // ВАЖНО: при включённом шумоподавлении мы сами открываем VOICE_COMMUNICATION-захват,
+        // из-за чего система может выставить MODE_IN_COMMUNICATION. Это НЕ звонок — не учитываем,
+        // пока работает наш NS-движок (иначе ломается гейт команд: всё требует слово активации).
         m == android.media.AudioManager.MODE_IN_CALL ||
-            (m == android.media.AudioManager.MODE_IN_COMMUNICATION && !btScoOn)
+            (m == android.media.AudioManager.MODE_IN_COMMUNICATION && !btScoOn && nsService == null)
     } catch (e: Exception) { false }
     fun wakeWordPublic(): String = wakeWord
 

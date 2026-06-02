@@ -93,6 +93,13 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     /** Играет ли сейчас звук. isMusicActive = true только при реальном воспроизведении. */
     private fun isMediaPlaying(): Boolean = try { audioManager.isMusicActive } catch (e: Exception) { false }
+    /** Активный разговор: сотовый (MODE_IN_CALL) или мессенджер (MODE_IN_COMMUNICATION), но не наш BT-SCO. */
+    private fun inCall(): Boolean = try {
+        val m = audioManager.mode
+        m == android.media.AudioManager.MODE_IN_CALL ||
+            (m == android.media.AudioManager.MODE_IN_COMMUNICATION && !btScoOn)
+    } catch (e: Exception) { false }
+    fun wakeWordPublic(): String = wakeWord
 
     /** Экран включён (интерактивен)? */
     private fun isScreenOn(): Boolean = try {
@@ -466,6 +473,18 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
         // Анти-петля: пока проигрывается синтезатор, не распознаём (иначе слышим сами себя)
         if (isSpeaking) { Logger.log("REC", "Игнор (говорит синтезатор): '$text'"); return }
+
+        // ИДЁТ РАЗГОВОР (сотовый звонок или звонок в мессенджере): голос собеседника не должен
+        // дёргать команды. Требуем слово активации; медиа-режим выключаем.
+        if (inCall()) {
+            clearMediaMode()
+            if (!text.contains(wakeWord)) { Logger.log("REC", "Игнор (идёт звонок): '$text'"); return }
+            val rest = stripWake(text).trim()
+            resetIdle()
+            if (rest.isBlank()) VoiceAccessibilityService.instance?.showStatus("${cap(wakeWord)} слушает (звонок)")
+            else handleCommand(rest)
+            return
+        }
 
         // ЭКРАН ВЫКЛЮЧЕН/ЗАБЛОКИРОВАН. Экран НЕ зажигаем. Разрешено:
         //  • «<слово> привет» — единственное, что включает/разблокирует экран;

@@ -20,6 +20,8 @@ sealed class Command {
     object VolumeDown : Command()
     object VolumeMute : Command()
     data class SetVolume(val level: Int) : Command()    // точная громкость 1..10
+    data class RecordVoice(val number: Int) : Command() // голосовое: зажать микрофон + свайп вверх (блокировка)
+    object RecordSend : Command()                        // отправить записанное голосовое
     object MediaPause : Command()             // пауза воспроизведения
     object MediaPlay : Command()              // воспроизвести
     object MediaNext : Command()              // следующий трек
@@ -70,6 +72,8 @@ sealed class Command {
         VolumeDown -> "Тише"
         VolumeMute -> "Без звука"
         is SetVolume -> "Громкость $level из 10"
+        is RecordVoice -> "Запись голосового" + (if (number > 0) " №$number" else "")
+        RecordSend -> "Отправить голосовое"
         MediaPause -> "Пауза видео"
         MediaPlay -> "Воспроизвести"
         MediaNext -> "Следующий трек"

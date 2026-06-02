@@ -112,6 +112,12 @@ object CommandParser {
             t.contains("ввод") || t.contains("отправ") || t.contains("энтер") -> return Command.EnterKey
             t.contains("вставь") || t.contains("вставить") -> return Command.Paste
             t.contains("копир") -> return Command.CopyText
+            // Голосовое сообщение: «запиши голосовое [N]» / «голосовое [N]» — зажать микрофон и заблокировать
+            t.contains("голосов") || (t.contains("запиш") && !t.contains("экран")) -> {
+                val n = extractNumber(t) ?: 0
+                return Command.RecordVoice(n)
+            }
+            t.contains("отправь") || t.contains("отправить") -> return Command.RecordSend
             t.contains("выдел") -> return Command.SelectAll
             t.contains("очист") -> return Command.ClearText
             (t.contains("удали") || t.contains("стер") || t.contains("сотри")) && t.contains("всё") -> return Command.ClearText

@@ -119,7 +119,7 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
         }
         headRow.addView(ImageView(this).apply {
-            setImageResource(R.drawable.dev_logo)
+            setImageResource(R.drawable.donbass_logo)
             val s = UiKit.dp(this@MainActivity, 54)
             layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = UiKit.dp(this@MainActivity, 12) }
         })
@@ -152,7 +152,7 @@ class MainActivity : ComponentActivity() {
         card.addView(UiKit.sectionHeader(this, "О приложении"))
         card.addView(UiKit.body(this, "ГолосРуки — голосовое управление смартфоном для людей с ограниченными возможностями."))
         card.addView(UiKit.body(this, "Офлайн-распознавание речи, без интернета и без передачи данных."))
-        card.addView(UiKit.body(this, "Версия 5.7 • Разработчик: Донбасс Реклама"))
+        card.addView(UiKit.body(this, "Версия 5.8 • Разработчик: Донбасс Реклама"))
         return card
     }
 

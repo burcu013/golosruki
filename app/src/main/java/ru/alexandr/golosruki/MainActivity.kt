@@ -183,7 +183,7 @@ class MainActivity : ComponentActivity() {
         card.addView(UiKit.sectionHeader(this, "О приложении"))
         card.addView(UiKit.body(this, "ГолосРуки — голосовое управление смартфоном для людей с ограниченными возможностями."))
         card.addView(UiKit.body(this, "Офлайн-распознавание речи, без интернета и без передачи данных."))
-        card.addView(UiKit.body(this, "Версия 6.4 • Разработчик: Донбасс Реклама"))
+        card.addView(UiKit.body(this, "Версия 6.5 • Разработчик: Донбасс Реклама"))
         return card
     }
 

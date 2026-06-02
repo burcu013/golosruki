@@ -1,6 +1,8 @@
 package ru.alexandr.golosruki
 
 import android.content.Context
+import android.graphics.Typeface
+import androidx.core.content.res.ResourcesCompat
 import android.graphics.Color
 import android.view.Gravity
 import android.view.ViewGroup
@@ -13,6 +15,13 @@ object UiKit {
 
     fun dp(ctx: Context, v: Int): Int = (v * ctx.resources.displayMetrics.density).toInt()
 
+    private var tfReg: Typeface? = null
+    private var tfBold: Typeface? = null
+    private var tfSemi: Typeface? = null
+    fun fontRegular(ctx: Context): Typeface? { if (tfReg == null) tfReg = runCatching { ResourcesCompat.getFont(ctx, R.font.montserrat_regular) }.getOrNull(); return tfReg }
+    fun fontBold(ctx: Context): Typeface? { if (tfBold == null) tfBold = runCatching { ResourcesCompat.getFont(ctx, R.font.montserrat_bold) }.getOrNull(); return tfBold }
+    fun fontSemi(ctx: Context): Typeface? { if (tfSemi == null) tfSemi = runCatching { ResourcesCompat.getFont(ctx, R.font.montserrat_semibold) }.getOrNull(); return tfSemi }
+
     fun column(ctx: Context, pad: Int = 20): LinearLayout = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
         val p = dp(ctx, pad)
@@ -22,7 +31,7 @@ object UiKit {
     fun title(ctx: Context, text: String): TextView = TextView(ctx).apply {
         this.text = text
         textSize = 28f
-        setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
+        setTypeface(fontBold(ctx))
         setTextColor(Color.parseColor("#1C1E22"))
         setPadding(0, 0, 0, dp(ctx, 4))
     }
@@ -30,6 +39,7 @@ object UiKit {
     fun subtitle(ctx: Context, text: String): TextView = TextView(ctx).apply {
         this.text = text
         textSize = 15f
+        setTypeface(fontRegular(ctx))
         setTextColor(Color.parseColor("#5A6370"))
         setPadding(0, 0, 0, dp(ctx, 16))
     }
@@ -37,7 +47,7 @@ object UiKit {
     fun sectionHeader(ctx: Context, text: String): TextView = TextView(ctx).apply {
         this.text = text
         textSize = 19f
-        setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
+        setTypeface(fontBold(ctx))
         setTextColor(Color.parseColor("#0E7C7B"))
         setPadding(0, dp(ctx, 16), 0, dp(ctx, 8))
     }
@@ -56,7 +66,7 @@ object UiKit {
             })
             addView(TextView(ctx).apply {
                 text = label; textSize = 14f; setTextColor(Color.WHITE)
-                setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
+                setTypeface(fontSemi(ctx))
                 gravity = Gravity.CENTER
                 setPadding(0, dp(ctx, 6), 0, 0)
             })
@@ -79,6 +89,7 @@ object UiKit {
     fun body(ctx: Context, text: String): TextView = TextView(ctx).apply {
         this.text = text
         textSize = 15f
+        setTypeface(fontRegular(ctx))
         setTextColor(Color.parseColor("#1C1E22"))
         setPadding(0, dp(ctx, 2), 0, dp(ctx, 2))
     }
@@ -87,6 +98,7 @@ object UiKit {
     fun hint(ctx: Context, text: String): TextView = TextView(ctx).apply {
         this.text = text
         textSize = 13f
+        setTypeface(fontRegular(ctx))
         setTextColor(Color.parseColor("#8A7320"))
         setBackgroundColor(Color.parseColor("#FFF6DA"))
         val p = dp(ctx, 8)
@@ -100,6 +112,7 @@ object UiKit {
     /** Строка гайда: команда жирно/цветом, описание после «—» обычным. */
     fun cmdLine(ctx: Context, line: String): TextView = TextView(ctx).apply {
         textSize = 15f
+        setTypeface(fontRegular(ctx))
         setPadding(dp(ctx, 4), dp(ctx, 5), 0, dp(ctx, 5))
         val sep = line.indexOf(" — ")
         if (sep > 0) {
@@ -125,6 +138,7 @@ object UiKit {
             setTextColor(Color.WHITE)
             textSize = 16f
             isAllCaps = false
+            setTypeface(fontSemi(ctx))
             setBackgroundResource(bg)
             val lp = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -143,6 +157,7 @@ object UiKit {
             setTextColor(Color.WHITE)
             textSize = 15f
             isAllCaps = false
+            setTypeface(fontSemi(ctx))
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
             setBackgroundResource(bg)
             val lp = LinearLayout.LayoutParams(
@@ -157,6 +172,7 @@ object UiKit {
     /** Стильный переключатель (зелёный во включённом состоянии). */
     fun switchView(ctx: Context): android.widget.Switch = android.widget.Switch(ctx).apply {
         textSize = 15f
+        setTypeface(fontRegular(ctx))
         setTextColor(Color.parseColor("#1C1E22"))
         val checkedStates = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
         thumbTintList = android.content.res.ColorStateList(checkedStates,

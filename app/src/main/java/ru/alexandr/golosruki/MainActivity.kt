@@ -81,20 +81,29 @@ class MainActivity : ComponentActivity() {
             ).apply { bottomMargin = UiKit.dp(this@MainActivity, 4) }
         }
         h.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_launcher_fg)
-            val s = UiKit.dp(this@MainActivity, 132)
-            layoutParams = LinearLayout.LayoutParams(s, s)
+            setImageResource(R.drawable.logo_header)
+            adjustViewBounds = true
+            layoutParams = LinearLayout.LayoutParams(
+                UiKit.dp(this@MainActivity, 232), LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = UiKit.dp(this@MainActivity, 8)
+                bottomMargin = UiKit.dp(this@MainActivity, 2)
+            }
         })
         h.addView(TextView(this).apply {
-            text = "ГолосРуки"; textSize = 30f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
+            text = "ГолосРуки"; textSize = 32f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
+            setTypeface(UiKit.fontBold(this@MainActivity))
         })
         h.addView(TextView(this).apply {
             text = "Управление телефоном голосом"; textSize = 15f
+            setTypeface(UiKit.fontRegular(this@MainActivity))
             setTextColor(Color.parseColor("#CFEAE9")); gravity = Gravity.CENTER
         })
         h.addView(TextView(this).apply {
             text = "  ОФЛАЙН  •  ПРИВАТНО  •  ДЛЯ ВСЕХ  "
             textSize = 12f; setTextColor(Color.WHITE)
+            setTypeface(UiKit.fontSemi(this@MainActivity))
             setBackgroundResource(R.drawable.badge_bg)
             val pad = UiKit.dp(this@MainActivity, 8)
             setPadding(pad * 2, pad, pad * 2, pad)
@@ -123,32 +132,49 @@ class MainActivity : ComponentActivity() {
         val headRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
         }
-        headRow.addView(ImageView(this).apply {
+        val logo = ImageView(this).apply {
             setImageResource(R.drawable.donbass_logo)
-            val s = UiKit.dp(this@MainActivity, 54)
-            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = UiKit.dp(this@MainActivity, 12) }
-        })
+            val s = UiKit.dp(this@MainActivity, 56)
+            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = UiKit.dp(this@MainActivity, 14) }
+        }
+        headRow.addView(logo)
         headRow.addView(TextView(this).apply {
-            text = "Донбасс Реклама"; textSize = 22f; setTextColor(Color.WHITE)
-            setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
+            text = "Донбасс Реклама"; textSize = 22f; setTextColor(Color.parseColor("#1C1E22"))
+            setTypeface(UiKit.fontBold(this@MainActivity))
         })
         b.addView(headRow)
         b.addView(TextView(this).apply {
             text = "Рекламное агентство. Создание приложений и сайтов, интеграция бизнеса с AI, вывески и реклама."
-            textSize = 14f; setTextColor(Color.parseColor("#FFF3E6"))
-            setPadding(0, UiKit.dp(this@MainActivity, 8), 0, UiKit.dp(this@MainActivity, 10))
+            textSize = 14f; setTextColor(Color.parseColor("#5A6370"))
+            setTypeface(UiKit.fontRegular(this@MainActivity))
+            setPadding(0, UiKit.dp(this@MainActivity, 10), 0, UiKit.dp(this@MainActivity, 12))
         })
         b.addView(TextView(this).apply {
             text = "  🌐  donbassreklama.ru  →  "
-            textSize = 14f; setTextColor(Color.parseColor("#B8692E"))
-            setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
-            setBackgroundColor(Color.WHITE)
-            val pad = UiKit.dp(this@MainActivity, 8)
+            textSize = 14f; setTextColor(Color.WHITE)
+            setTypeface(UiKit.fontSemi(this@MainActivity))
+            setBackgroundResource(R.drawable.btn_link)
+            val pad = UiKit.dp(this@MainActivity, 10)
             setPadding(pad * 2, pad, pad * 2, pad)
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             )
         })
+        // лёгкая анимация: плавное появление баннера + «дыхание» логотипа
+        b.alpha = 0f
+        b.post {
+            b.animate().alpha(1f).setDuration(550).start()
+            android.animation.ObjectAnimator.ofPropertyValuesHolder(
+                logo,
+                android.animation.PropertyValuesHolder.ofFloat("scaleX", 1f, 1.06f),
+                android.animation.PropertyValuesHolder.ofFloat("scaleY", 1f, 1.06f)
+            ).apply {
+                duration = 1600
+                repeatMode = android.animation.ValueAnimator.REVERSE
+                repeatCount = android.animation.ValueAnimator.INFINITE
+                start()
+            }
+        }
         return b
     }
 
@@ -157,7 +183,7 @@ class MainActivity : ComponentActivity() {
         card.addView(UiKit.sectionHeader(this, "О приложении"))
         card.addView(UiKit.body(this, "ГолосРуки — голосовое управление смартфоном для людей с ограниченными возможностями."))
         card.addView(UiKit.body(this, "Офлайн-распознавание речи, без интернета и без передачи данных."))
-        card.addView(UiKit.body(this, "Версия 6.2 • Разработчик: Донбасс Реклама"))
+        card.addView(UiKit.body(this, "Версия 6.3 • Разработчик: Донбасс Реклама"))
         return card
     }
 

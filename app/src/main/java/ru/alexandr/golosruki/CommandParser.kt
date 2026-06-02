@@ -17,6 +17,9 @@ object CommandParser {
         val t = raw.lowercase().trim()
         if (t.isEmpty()) return Command.Unknown
 
+        // 0.0 Персональные триггеры/коррекции (супер-режим, дообучение) — высший приоритет
+        CommandAliases.match(t)?.let { return it }
+
         // 0. Разблокировка («привет» после «Иван»)
         if (t.contains("привет")) return Command.Unlock
 

@@ -28,6 +28,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var bigModel: Model? = null     // большая модель — только для диктовки, грузится лениво
     @Volatile private var bigLoading = false
     private var speechService: SpeechService? = null
+    private var nsService: NsSpeechService? = null            // альтернативный движок с шумоподавлением
+    @Volatile private var useNoiseSuppress = false            // тумблер (по умолчанию ВЫКЛ)
     private lateinit var personal: PersonalConfig
     private val handler = Handler(Looper.getMainLooper())
 
@@ -215,6 +217,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        Logger.init(this)
+        Logger.log("SVC", "Служба запущена")
         paused = false
         personal = PersonalConfig.load(this)
         wakeWord = SettingsStore.getWake(this)
@@ -230,6 +234,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         ttsPitch = SettingsStore.getTtsPitch(this)
         ttsRate = SettingsStore.getTtsRate(this)
         ttsVoiceName = SettingsStore.getTtsVoice(this)
+        CommandAliases.aliasMap = SettingsStore.getAliasMap(this)   // персональные триггеры/коррекции
+        useNoiseSuppress = SettingsStore.getNoiseSuppress(this)
         if (SettingsStore.getBtMic(this)) enableBtMic()
         if (ttsEnabled) {
             tts = android.speech.tts.TextToSpeech(this) { status ->
@@ -244,7 +250,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 }
             }
             tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-                override fun onStart(id: String?) { isSpeaking = true; runCatching { speechService?.setPause(true) } }
+                override fun onStart(id: String?) { isSpeaking = true; listeningSetPause(true) }
                 override fun onDone(id: String?) { scheduleResume(500) }
                 @Deprecated("deprecated") override fun onError(id: String?) { scheduleResume(500) }
             })
@@ -306,7 +312,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     private val resumeAfterSpeak = Runnable {
         isSpeaking = false
-        runCatching { speechService?.setPause(false) }
+        listeningSetPause(false)
         Logger.log("REC", "Распознавание возобновлено после речи")
     }
     private fun scheduleResume(delay: Long) {
@@ -318,7 +324,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (!ttsEnabled || !ttsReady) return
         // ПОЛНОСТЬЮ глушим распознавание на время речи: Vosk не копит звук синтезатора (анти-петля)
         isSpeaking = true
-        runCatching { speechService?.setPause(true) }
+        listeningSetPause(true)
         runCatching {
             tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki")
         }
@@ -403,10 +409,22 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     /** Перезапуск распознавателя под текущий режим: команды → малая+грамматика; диктовка → большая (если есть) свободно. */
-    private fun restartListening() {
+    private fun listeningStop() {
+        runCatching { nsService?.stop() }
+        runCatching { nsService?.shutdown() }
+        nsService = null
         runCatching { speechService?.stop() }
         runCatching { speechService?.shutdown() }
         speechService = null
+    }
+
+    private fun listeningSetPause(p: Boolean) {
+        if (nsService != null) runCatching { nsService?.setPause(p) }
+        else runCatching { speechService?.setPause(p) }
+    }
+
+    private fun restartListening() {
+        listeningStop()
         handler.postDelayed({
             val m = model ?: return@postDelayed
             val rec = if (dictation) {
@@ -415,16 +433,33 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             } else {
                 Recognizer(m, 16000.0f, Vocabulary.buildGrammar(personal, wakeWord, mediaCode))
             }
-            speechService = SpeechService(rec, 16000.0f)
-            speechService?.startListening(this)
-            Logger.log("REC", "Слушаю (диктовка=$dictation, большая=${dictation && bigForDictation && bigModel != null})")
+            if (useNoiseSuppress) {
+                val s = NsSpeechService(rec, 16000, this)
+                if (s.start()) {
+                    nsService = s
+                } else {
+                    Logger.log("NS", "Шумоподавление не запустилось — откат на штатный движок")
+                    speechService = SpeechService(rec, 16000.0f).also { it.startListening(this) }
+                }
+            } else {
+                speechService = SpeechService(rec, 16000.0f)
+                speechService?.startListening(this)
+            }
+            Logger.log("REC", "Слушаю (диктовка=$dictation, шумоподавление=${nsService != null})")
         }, 180)
     }
 
     fun enterDictation(digits: Boolean = false) {
+        val alreadyDictating = dictation
         dictation = true
         dictationDigits = digits
-        dictBuffer.setLength(0)
+        // При первом входе — забираем уже имеющийся текст поля, чтобы не стереть его.
+        // При переключении режима (текст↔цифры) — буфер НЕ трогаем.
+        if (!alreadyDictating) {
+            dictBuffer.setLength(0)
+            dictBuffer.append(VoiceAccessibilityService.instance?.currentFieldText() ?: "")
+            if (dictBuffer.isNotEmpty() && dictBuffer.last() != ' ' && dictBuffer.last() != '\n') dictBuffer.append(" ")
+        }
         VoiceAccessibilityService.instance?.setStatusIcon(if (digits) OverlayView.Icon.DIGITS else OverlayView.Icon.PEN)
         // лениво подгружаем большую модель для текста (один раз), команды это не тормозит
         if (bigForDictation && bigModel == null && !bigLoading) {
@@ -470,6 +505,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         val raw = hypothesis?.let { JSONObject(it).optString("text") } ?: return
         val text = normalize(raw.replace("[unk]", " "))
         if (text.isBlank()) return
+        Logger.log("HEARD", "'$text' | state=$state media=$mediaControlMode dict=$dictation digits=$dictationDigits call=${inCall()}")
 
         // Анти-петля: пока проигрывается синтезатор, не распознаём (иначе слышим сами себя)
         if (isSpeaking) { Logger.log("REC", "Игнор (говорит синтезатор): '$text'"); return }
@@ -570,10 +606,27 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 text.contains("готово") || text.contains("конец")) {
                 exitDictation(); return
             }
+            // Переключение режима БЕЗ выхода и БЕЗ стирания набранного:
+            //  «цифры/цифрами» → ввод цифр; «буквы/текст/словами» → снова текст.
+            if (!dictationDigits && (text.contains("цифр"))) {
+                dictationDigits = true
+                VoiceAccessibilityService.instance?.setStatusIcon(OverlayView.Icon.DIGITS)
+                VoiceAccessibilityService.instance?.showStatus("Цифры (текст сохранён): говорите номер")
+                resetIdle(); return
+            }
+            if (dictationDigits && (text.contains("букв") || text.contains("текст") || text.contains("словам") || text.contains("напиш") || text.contains("диктов"))) {
+                dictationDigits = false
+                VoiceAccessibilityService.instance?.setStatusIcon(OverlayView.Icon.PEN)
+                VoiceAccessibilityService.instance?.showStatus("Текст (цифры сохранены): говорите")
+                resetIdle(); return
+            }
             resetIdle()
             if (dictationDigits) {
                 val chunk = NumberWords.toDigits(text)
-                if (chunk.isNotBlank()) { dictBuffer.append(chunk); flushDictation() }
+                if (chunk.isNotBlank()) {
+                    if (dictBuffer.isNotEmpty() && dictBuffer.last() != ' ' && dictBuffer.last() != '\n') dictBuffer.append(" ")
+                    dictBuffer.append(chunk); flushDictation()
+                }
             } else {
                 applyDictation(text)
             }
@@ -695,8 +748,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(idleRunnable)
-        runCatching { speechService?.stop() }
-        runCatching { speechService?.shutdown() }
+        listeningStop()
         model?.close()
         runCatching { bigModel?.close() }; bigModel = null
         disableBtMic()

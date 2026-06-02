@@ -1,7 +1,9 @@
 package ru.alexandr.golosruki
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.widget.Button
@@ -55,6 +57,16 @@ class TestActivity : ComponentActivity(), RecognitionListener {
 
         btn = Button(this).apply { text = "Старт"; setOnClickListener { toggle() } }
         root.addView(btn)
+
+        root.addView(Button(this).apply {
+            text = "🎯 Запомнить как команду"
+            setOnClickListener { showLearnDialog() }
+        })
+        root.addView(TextView(this).apply {
+            text = "Дообучение: скажите слово так, как вам удобно → выше появится распознанный текст → " +
+                "нажмите «Запомнить как команду» и выберите, что это значит. Иван будет понимать именно вашу речь."
+            textSize = 14f; setPadding(0, 16, 0, 0)
+        })
 
         root.addView(TextView(this).apply {
             text = "Говорите любые слова — внизу должен появляться распознанный текст.\n\n" +
@@ -122,7 +134,30 @@ class TestActivity : ComponentActivity(), RecognitionListener {
 
     override fun onResult(hypothesis: String?) {
         val t = hypothesis?.let { JSONObject(it).optString("text") } ?: return
-        if (t.isNotBlank()) { heard.text = "✓ $t"; Logger.log("TEST", "Распознано: $t") }
+        if (t.isNotBlank()) { heard.text = "✓ $t"; lastHeard = t.trim(); Logger.log("TEST", "Распознано: $t") }
+    }
+
+    private var lastHeard = ""
+    private fun showLearnDialog() {
+        if (lastHeard.isBlank()) {
+            android.widget.Toast.makeText(this, "Сначала скажите слово (должно появиться выше)", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = CommandAliases.registry.map { it.label }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("«$lastHeard» — это команда:")
+            .setItems(labels) { _, which ->
+                val key = CommandAliases.registry[which].key
+                SettingsStore.addAlias(this, lastHeard, key)
+                CommandAliases.aliasMap = SettingsStore.getAliasMap(this)
+                // перезапуск службы, чтобы новое слово попало в грамматику распознавания
+                val s = Intent(this, VoiceRecognitionService::class.java)
+                stopService(s)
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(s) else startService(s)
+                android.widget.Toast.makeText(this, "Запомнил: «$lastHeard» → ${labels[which]}", android.widget.Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton("Отмена", null)
+            .show()
     }
 
     override fun onFinalResult(hypothesis: String?) {}

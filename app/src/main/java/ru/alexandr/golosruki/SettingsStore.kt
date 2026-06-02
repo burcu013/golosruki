@@ -101,6 +101,28 @@ object SettingsStore {
     fun setTtsRate(ctx: Context, v: Float) = p(ctx).edit().putFloat("tts_rate", v).apply()
     fun getBtMic(ctx: Context): Boolean = p(ctx).getBoolean("bt_mic", false)
     fun setBtMic(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("bt_mic", v).apply()
+
+    fun getNoiseSuppress(ctx: Context): Boolean = p(ctx).getBoolean("noise_suppress", false)
+    fun setNoiseSuppress(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("noise_suppress", v).apply()
+
+    /** Карта персональных триггеров/коррекций: фраза → ключ команды. */
+    fun getAliasMap(ctx: Context): Map<String, String> {
+        val raw = p(ctx).getString("aliases", "") ?: ""
+        if (raw.isBlank()) return emptyMap()
+        return try {
+            val o = org.json.JSONObject(raw); val m = HashMap<String, String>()
+            val it = o.keys(); while (it.hasNext()) { val k = it.next(); m[k.lowercase().trim()] = o.getString(k) }
+            m
+        } catch (e: Exception) { emptyMap() }
+    }
+    fun setAliasMap(ctx: Context, map: Map<String, String>) {
+        val o = org.json.JSONObject()
+        for ((phrase, key) in map) if (phrase.isNotBlank()) o.put(phrase.lowercase().trim(), key)
+        p(ctx).edit().putString("aliases", o.toString()).apply()
+    }
+    fun addAlias(ctx: Context, phrase: String, key: String) {
+        val m = HashMap(getAliasMap(ctx)); m[phrase.lowercase().trim()] = key; setAliasMap(ctx, m)
+    }
     fun getTtsVoice(ctx: Context): String = p(ctx).getString("tts_voice", "") ?: ""
     fun setTtsVoice(ctx: Context, v: String) = p(ctx).edit().putString("tts_voice", v).apply()
     fun getConfirmCalls(ctx: Context): Boolean = p(ctx).getBoolean("confirm_calls", false)

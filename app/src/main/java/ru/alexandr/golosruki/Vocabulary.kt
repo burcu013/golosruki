@@ -61,6 +61,7 @@ object Vocabulary {
         personal.customApps.keys.forEach { phrase -> phrase.split(" ").forEach { words.add(it) } }
         personal.sosPin.split(" ").forEach { if (it.isNotBlank()) words.add(it) }
         mediaCode.split(" ").forEach { if (it.isNotBlank()) words.add(it) }
+        CommandAliases.aliasWords().forEach { words.add(it) }   // персональные триггеры
         val json = words.joinToString(",") { "\"$it\"" }
         // [unk] позволяет модели выдавать «неизвестно» вместо подбора ближайшего слова к шуму
         return "[$json,\"[unk]\"]"

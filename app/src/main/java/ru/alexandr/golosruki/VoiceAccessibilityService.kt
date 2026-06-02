@@ -72,6 +72,7 @@ class VoiceAccessibilityService : AccessibilityService() {
     }
 
     fun execute(command: Command) {
+        Logger.log("EXEC", command.label())
         // любая новая команда (кроме самого автоскролла) останавливает непрерывное листание
         if (command !is Command.AutoScroll) stopAutoScroll()
         if (command !is Command.Unlock) showStatus(command.label())
@@ -513,7 +514,23 @@ class VoiceAccessibilityService : AccessibilityService() {
     // --- Ввод текста ---
     private fun focusedEditable(): AccessibilityNodeInfo? {
         val root = rootInActiveWindow ?: return null
-        return root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: findEditable(root)
+        val f = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (f != null && f.isEditable && f.isVisibleToUser) return f
+        // запасной вариант — ТОЛЬКО видимое редактируемое поле в активном окне (не лезем в фон)
+        val e = findEditable(root)
+        return if (e != null && e.isEditable && e.isVisibleToUser) e else null
+    }
+
+    /** Текущий текст поля ввода (без подсказки-хинта) — для продолжения диктовки. */
+    fun currentFieldText(): String {
+        val node = focusedEditable() ?: return ""
+        var existing = node.text?.toString() ?: ""
+        if (Build.VERSION.SDK_INT >= 26) {
+            if (node.isShowingHintText) existing = ""
+            val hint = node.hintText?.toString()
+            if (hint != null && existing == hint) existing = ""
+        }
+        return existing
     }
 
     private fun findEditable(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {

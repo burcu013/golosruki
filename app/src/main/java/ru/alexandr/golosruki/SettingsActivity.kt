@@ -20,6 +20,7 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var ttsCheck: android.widget.Switch
     private lateinit var confirmCheck: android.widget.Switch
     private lateinit var btMicCheck: android.widget.Switch
+    private lateinit var noiseCheck: android.widget.Switch
     private lateinit var sosNum2: EditText
     private lateinit var voiceSpinner: android.widget.Spinner
     private lateinit var pitchBar: android.widget.SeekBar
@@ -131,6 +132,12 @@ class SettingsActivity : ComponentActivity() {
         }
         a.addView(btMicCheck)
         a.addView(UiKit.hint(this, "🎧 Если гарнитура недоступна или села — Иван автоматически вернётся на встроенный микрофон. Поддержка зависит от модели телефона/гарнитуры."))
+        noiseCheck = UiKit.switchView(this).apply {
+            text = "Шумоподавление (эксперимент)"; textSize = 15f
+            isChecked = SettingsStore.getNoiseSuppress(this@SettingsActivity)
+        }
+        a.addView(noiseCheck)
+        a.addView(UiKit.hint(this, "🔇 Включает аппаратное подавление шума и эха микрофона. ПО УМОЛЧАНИЮ ВЫКЛ — включайте, только если в шумной обстановке/при эхе команды распознаются хуже. Если станет хуже — выключите. Поддержка и качество зависят от модели телефона."))
         col.addView(a)
 
         // Калибровка свайпов
@@ -422,6 +429,7 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setTts(this, ttsCheck.isChecked)
         SettingsStore.setConfirmCalls(this, confirmCheck.isChecked)
         SettingsStore.setBtMic(this, btMicCheck.isChecked)
+        SettingsStore.setNoiseSuppress(this, noiseCheck.isChecked)
         SettingsStore.setSosNumber2(this, sosNum2.text.toString())
         if (::pitchBar.isInitialized) SettingsStore.setTtsPitch(this, curPitch())
         if (::rateBar.isInitialized) SettingsStore.setTtsRate(this, curRate())

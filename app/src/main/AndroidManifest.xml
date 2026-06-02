@@ -52,6 +52,7 @@
 
         <activity android:name=".GuideActivity" android:exported="false" />
         <activity android:name=".SettingsActivity" android:exported="false" />
+        <activity android:name=".DevModeActivity" android:exported="false" />
 
         <!-- Активность пробуждения/разблокировки экрана -->
         <activity

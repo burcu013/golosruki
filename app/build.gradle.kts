@@ -11,8 +11,8 @@ android {
         applicationId = "ru.alexandr.golosruki"
         minSdk = 26
         targetSdk = 34
-        versionCode = 48
-        versionName = "6.17"
+        versionCode = 49
+        versionName = "6.18"
     }
 
     buildTypes {
@@ -32,4 +32,9 @@ dependencies {
     // Офлайн-распознавание речи (русский)
     implementation("com.alphacephei:vosk-android:0.3.75")
     implementation("net.java.dev.jna:jna:5.18.1@aar")
+
+    // Вариант B: встроенный adb-клиент для выдачи разрешения по коду сопряжения (без Termux)
+    implementation("com.github.MuntashirAkon:libadb-android:3.1.1")
+    implementation("com.github.MuntashirAkon:sun-security-android:1.1")
+    implementation("org.conscrypt:conscrypt-android:2.5.3")
 }

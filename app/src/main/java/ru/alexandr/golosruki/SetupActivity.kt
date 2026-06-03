@@ -16,6 +16,29 @@ class SetupActivity : ComponentActivity() {
 
     private lateinit var statusKb: TextView
     private lateinit var statusPerm: TextView
+    private lateinit var hostField: android.widget.EditText
+    private lateinit var portField: android.widget.EditText
+    private lateinit var codeField: android.widget.EditText
+    private lateinit var bResult: TextView
+
+    private fun editText(hintText: String, type: Int): android.widget.EditText =
+        android.widget.EditText(this).apply { hint = hintText; inputType = type }
+
+    private fun runPairAndGrant() {
+        val host = hostField.text.toString().trim()
+        val port = portField.text.toString().trim().toIntOrNull()
+        val code = codeField.text.toString().trim()
+        if (host.isEmpty() || port == null || code.isEmpty()) {
+            bResult.text = "Заполните адрес, порт и код."
+            return
+        }
+        bResult.text = "Сопряжение…"
+        Thread {
+            val res = runCatching { AdbManager.pairAndGrant(this, host, port, code) }
+                .getOrElse { "Ошибка: ${it.message ?: it.javaClass.simpleName}" }
+            runOnUiThread { bResult.text = res; refresh() }
+        }.start()
+    }
 
     private val grantCmd =
         "adb shell pm grant ru.alexandr.golosruki android.permission.WRITE_SECURE_SETTINGS"
@@ -67,6 +90,21 @@ class SetupActivity : ComponentActivity() {
             copy(grantCmd); Toast.makeText(this, "Команда скопирована", Toast.LENGTH_SHORT).show()
         })
         col.addView(c2)
+
+        // Способ B — встроенный adb (без Termux)
+        val cb = UiKit.card(this)
+        cb.addView(UiKit.sectionHeader(this, "Способ B — без Termux"))
+        cb.addView(UiKit.body(this, "Включите «Беспроводную отладку» → «Подключить с кодом сопряжения». Введите показанные адрес, порт и код сюда и нажмите кнопку — приложение само выдаст разрешение."))
+        hostField = editText("Адрес (например 192.168.0.5)", android.text.InputType.TYPE_CLASS_TEXT)
+        cb.addView(hostField)
+        portField = editText("Порт сопряжения (например 37123)", android.text.InputType.TYPE_CLASS_NUMBER)
+        cb.addView(portField)
+        codeField = editText("Код сопряжения (6 цифр)", android.text.InputType.TYPE_CLASS_NUMBER)
+        cb.addView(codeField)
+        bResult = UiKit.body(this, "")
+        cb.addView(bResult)
+        cb.addView(UiKit.button(this, "🔗 Сопрячь и выдать разрешение") { runPairAndGrant() })
+        col.addView(cb)
 
         col.addView(UiKit.button(this, "🔄 Проверить готовность") { refresh() })
         col.addView(UiKit.hint(this, "Если беспроводная отладка недоступна — то же можно сделать adb с компьютера по USB. Без этого разрешения авто-переключение работать не будет (диктовка тогда — только в обычных полях через спец-возможности)."))

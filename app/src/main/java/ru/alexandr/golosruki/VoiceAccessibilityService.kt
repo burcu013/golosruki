@@ -558,17 +558,14 @@ class VoiceAccessibilityService : AccessibilityService() {
         return null
     }
 
-    @Volatile private var dictUseSetText = true
     @Volatile private var dictCommittedLen = 0
 
-    /** Старт диктовки: чистим поле и выбираем способ ввода (прямая замена или вставка через буфер). */
+    /** Старт диктовки: чистим поле, сбрасываем счётчик. Способ ввода выбираем на каждом шаге. */
     fun beginDictationField() {
+        dictCommittedLen = 0
         val node = focusedEditable() ?: return
         val empty = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "") }
-        dictUseSetText = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, empty)
-        dictCommittedLen = 0
-        if (!dictUseSetText) {
-            // поле не принимает прямую замену — очистим выделением+вырезанием, дальше вставка через буфер
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, empty)) {
             runCatching {
                 val len = node.text?.length ?: 0
                 val sel = Bundle().apply {
@@ -581,28 +578,34 @@ class VoiceAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Зафиксировать текст диктовки БЕЗ дублирования: либо прямая замена, либо вставка ТОЛЬКО нового куска. */
+    /** Зафиксировать текст диктовки. Сначала пробуем прямую замену (надёжно в обычных полях),
+     *  если поле не принимает — вставляем ТОЛЬКО новый кусок через буфер обмена (без дублей). */
     fun commitDictation(full: String) {
         val node = focusedEditable() ?: run { showStatus("Нет поля ввода"); return }
-        if (dictUseSetText) {
-            val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, full) }
-            if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-                val sel = Bundle().apply {
-                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, full.length)
-                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, full.length)
-                }
-                runCatching { node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel) }
-                return
+        // 1. Прямая замена всего текста — основной путь
+        val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, full) }
+        if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+            val sel = Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, full.length)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, full.length)
             }
-            dictUseSetText = false; dictCommittedLen = 0   // перестало приниматься — переходим на вставку
+            runCatching { node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel) }
+            dictCommittedLen = full.length
+            return
         }
+        // 2. Запасной путь: вставить только НОВЫЙ кусок через буфер обмена
         val from = dictCommittedLen.coerceIn(0, full.length)
         val delta = full.substring(from)
         if (delta.isNotEmpty()) {
             runCatching {
                 val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("dictation", delta))
-                node.performAction(AccessibilityNodeInfo.ACTION_PASTE)   // вставка только нового куска в позицию курсора
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("d", delta))
+                node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                if (!node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
+                    // некоторые поля принимают вставку только на дочернем фокусном узле
+                    rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                        ?.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                }
             }
         }
         dictCommittedLen = full.length

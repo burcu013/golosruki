@@ -406,6 +406,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     private fun stateText(): String = when {
+        aiListening -> if (aiAsk) "🧠 Слушаю вопрос — говорите" else "🧠 Что сформулировать — говорите"
+        dictation && dictationDigits -> "✍️ Диктовка цифрами — «готово» для выхода"
         dictation -> "✍️ Диктовка — говорите текст, «готово» для выхода"
         paused -> "⏸ Пауза — скажите «слушай»"
         state == State.AWAKE -> "🎙 Слушаю команды"
@@ -525,9 +527,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             VoiceAccessibilityService.instance?.beginDictationField()
         }
         VoiceAccessibilityService.instance?.setStatusIcon(if (digits) OverlayView.Icon.DIGITS else OverlayView.Icon.PEN)
-        val hint = if (digits) "Диктовка цифрами: говорите номер, «готово» — выход"
-        else "Диктовка: говорите текст, «готово» — выход"
-        VoiceAccessibilityService.instance?.showStatus(hint)
+        VoiceAccessibilityService.instance?.showStatus(stateText())
         restartListening()   // пока (или если без большой) — свободный режим на малой
         resetIdle(); refreshNotification()
     }
@@ -551,8 +551,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         }
         aiAsk = ask
         aiListening = true
-        val hint = if (ask) "🧠 Слушаю вопрос — говорите" else "🧠 Что сформулировать — говорите"
-        VoiceAccessibilityService.instance?.showStatus(hint)
+        VoiceAccessibilityService.instance?.showStatus(stateText())
         Logger.log("AI", "Захват ${if (ask) "вопроса" else "текста"} для ИИ")
         restartListening()   // свободное распознавание
         resetIdle()
@@ -701,13 +700,13 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             if (!dictationDigits && (text.contains("цифр"))) {
                 dictationDigits = true
                 VoiceAccessibilityService.instance?.setStatusIcon(OverlayView.Icon.DIGITS)
-                VoiceAccessibilityService.instance?.showStatus("Цифры (текст сохранён): говорите номер")
+                VoiceAccessibilityService.instance?.showStatus(stateText())
                 resetIdle(); return
             }
             if (dictationDigits && (text.contains("букв") || text.contains("текст") || text.contains("словам") || text.contains("напиш") || text.contains("диктов"))) {
                 dictationDigits = false
                 VoiceAccessibilityService.instance?.setStatusIcon(OverlayView.Icon.PEN)
-                VoiceAccessibilityService.instance?.showStatus("Текст (цифры сохранены): говорите")
+                VoiceAccessibilityService.instance?.showStatus(stateText())
                 resetIdle(); return
             }
             resetIdle()

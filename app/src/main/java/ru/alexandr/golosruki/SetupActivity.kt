@@ -3,6 +3,7 @@ package ru.alexandr.golosruki
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
@@ -20,6 +21,29 @@ class SetupActivity : ComponentActivity() {
     private lateinit var portField: android.widget.EditText
     private lateinit var codeField: android.widget.EditText
     private lateinit var bResult: TextView
+    private lateinit var autoResult: TextView
+
+    private val notifPerm = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) beginAutoPair()
+        else autoResult.text = "Без разрешения на уведомления автосопряжение не сможет показать поле для кода. Разрешите его или введите вручную."
+    }
+
+    private fun startAutoPair() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            notifPerm.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        beginAutoPair()
+    }
+
+    private fun beginAutoPair() {
+        autoResult.text = "Запускаю поиск…"
+        AdbAutoPair.start(this) { msg -> runOnUiThread { autoResult.text = msg } }
+    }
 
     private fun editText(hintText: String, type: Int): android.widget.EditText =
         android.widget.EditText(this).apply { hint = hintText; inputType = type }
@@ -94,16 +118,20 @@ class SetupActivity : ComponentActivity() {
         // Способ B — встроенный adb (без Termux)
         val cb = UiKit.card(this)
         cb.addView(UiKit.sectionHeader(this, "Способ B — без Termux"))
-        cb.addView(UiKit.body(this, "Включите «Беспроводную отладку» → «Подключить с кодом сопряжения». Введите показанные адрес, порт и код сюда и нажмите кнопку — приложение само выдаст разрешение."))
-        hostField = editText("Адрес (например 192.168.0.5)", android.text.InputType.TYPE_CLASS_TEXT)
+        cb.addView(UiKit.body(this, "Включите «Беспроводную отладку». Затем нажмите кнопку ниже и откройте «Подключить с помощью кода подключения» — приложение само найдёт окно, а код вы введёте через уведомление, НЕ закрывая окно сопряжения."))
+        autoResult = UiKit.body(this, "")
+        cb.addView(autoResult)
+        cb.addView(UiKit.button(this, "🔍 Автосопряжение (рекомендуется)") { startAutoPair() })
+        cb.addView(UiKit.hint(this, "Если автопоиск не сработает — введите адрес, порт и код вручную ниже:"))
+        hostField = editText("Адрес (например 10.0.0.1)", android.text.InputType.TYPE_CLASS_TEXT)
         cb.addView(hostField)
-        portField = editText("Порт сопряжения (например 37123)", android.text.InputType.TYPE_CLASS_NUMBER)
+        portField = editText("Порт сопряжения (из окна с кодом!)", android.text.InputType.TYPE_CLASS_NUMBER)
         cb.addView(portField)
         codeField = editText("Код сопряжения (6 цифр)", android.text.InputType.TYPE_CLASS_NUMBER)
         cb.addView(codeField)
         bResult = UiKit.body(this, "")
         cb.addView(bResult)
-        cb.addView(UiKit.button(this, "🔗 Сопрячь и выдать разрешение") { runPairAndGrant() })
+        cb.addView(UiKit.button(this, "🔗 Сопрячь вручную") { runPairAndGrant() })
         col.addView(cb)
 
         col.addView(UiKit.button(this, "🔄 Проверить готовность") { refresh() })

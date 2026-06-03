@@ -4,7 +4,14 @@ import android.content.Context
 import android.os.Build
 import io.github.muntashirakon.adb.AbsAdbConnectionManager
 import io.github.muntashirakon.adb.AdbStream
+import org.bouncycastle.asn1.x500.X500Name
+import org.bouncycastle.asn1.x509.Extension
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
+import org.bouncycastle.cert.jcajce.JcaX509ExtensionUtils
+import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
 import org.conscrypt.Conscrypt
+import java.math.BigInteger
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.PrivateKey
@@ -12,27 +19,12 @@ import java.security.SecureRandom
 import java.security.Security
 import java.security.cert.Certificate
 import java.util.Date
-import java.util.Random
-import sun.security.x509.AlgorithmId
-import sun.security.x509.CertificateAlgorithmId
-import sun.security.x509.CertificateExtensions
-import sun.security.x509.CertificateIssuerName
-import sun.security.x509.CertificateSerialNumber
-import sun.security.x509.CertificateSubjectName
-import sun.security.x509.CertificateValidity
-import sun.security.x509.CertificateVersion
-import sun.security.x509.CertificateX509Key
-import sun.security.x509.KeyIdentifier
-import sun.security.x509.PrivateKeyUsageExtension
-import sun.security.x509.SubjectKeyIdentifierExtension
-import sun.security.x509.X500Name
-import sun.security.x509.X509CertImpl
-import sun.security.x509.X509CertInfo
 
 /**
  * Вариант B: встроенный adb-клиент.
  * Сопрягается с беспроводной отладкой телефона по коду и сам выполняет
  * `pm grant ... WRITE_SECURE_SETTINGS` — без Termux и компьютера.
+ * Сертификат генерируется через BouncyCastle.
  */
 class AdbManager private constructor() : AbsAdbConnectionManager() {
 
@@ -41,36 +33,23 @@ class AdbManager private constructor() : AbsAdbConnectionManager() {
 
     init {
         setApi(Build.VERSION.SDK_INT)
-        val keySize = 2048
         val gen = KeyPairGenerator.getInstance("RSA")
-        gen.initialize(keySize, SecureRandom.getInstance("SHA1PRNG"))
+        gen.initialize(2048, SecureRandom.getInstance("SHA1PRNG"))
         val pair: KeyPair = gen.generateKeyPair()
         val publicKey = pair.public
         privateKeyField = pair.private
 
-        val subject = "CN=GolosRuki"
-        val algorithmName = "SHA512withRSA"
-        val expiry = System.currentTimeMillis() + 86400000L * 365
-        val ext = CertificateExtensions()
-        ext.set("SubjectKeyIdentifier",
-            SubjectKeyIdentifierExtension(KeyIdentifier(publicKey).identifier))
-        val x500 = X500Name(subject)
+        val subject = X500Name("CN=GolosRuki")
         val notBefore = Date()
-        val notAfter = Date(expiry)
-        ext.set("PrivateKeyUsage", PrivateKeyUsageExtension(notBefore, notAfter))
-        val validity = CertificateValidity(notBefore, notAfter)
-        val info = X509CertInfo()
-        info.set("version", CertificateVersion(2))
-        info.set("serialNumber", CertificateSerialNumber(Random().nextInt() and Int.MAX_VALUE))
-        info.set("algorithmID", CertificateAlgorithmId(AlgorithmId.get(algorithmName)))
-        info.set("subject", CertificateSubjectName(x500))
-        info.set("key", CertificateX509Key(publicKey))
-        info.set("validity", validity)
-        info.set("issuer", CertificateIssuerName(x500))
-        info.set("extensions", ext)
-        val cert = X509CertImpl(info)
-        cert.sign(privateKeyField, algorithmName)
-        certificateField = cert
+        val notAfter = Date(System.currentTimeMillis() + 86400000L * 365)
+        val serial = BigInteger.valueOf(System.currentTimeMillis())
+        val builder = JcaX509v3CertificateBuilder(subject, serial, notBefore, notAfter, subject, publicKey)
+        builder.addExtension(
+            Extension.subjectKeyIdentifier, false,
+            JcaX509ExtensionUtils().createSubjectKeyIdentifier(publicKey)
+        )
+        val signer = JcaContentSignerBuilder("SHA512withRSA").build(privateKeyField)
+        certificateField = JcaX509CertificateConverter().getCertificate(builder.build(signer))
     }
 
     override fun getPrivateKey(): PrivateKey = privateKeyField
@@ -91,7 +70,7 @@ class AdbManager private constructor() : AbsAdbConnectionManager() {
 
         /**
          * Сопрячься по коду, подключиться и выдать разрешение.
-         * Возвращает текст результата (для показа пользователю). Блокирующий — вызывать в фоне.
+         * Возвращает текст результата. Блокирующий — вызывать в фоне.
          */
         fun pairAndGrant(context: Context, host: String, pairPort: Int, code: String): String {
             ensureConscrypt()

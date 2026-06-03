@@ -11,8 +11,8 @@ android {
         applicationId = "ru.alexandr.golosruki"
         minSdk = 26
         targetSdk = 34
-        versionCode = 46
-        versionName = "6.15"
+        versionCode = 48
+        versionName = "6.17"
     }
 
     buildTypes {

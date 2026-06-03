@@ -332,7 +332,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     private fun flushDictation() {
         val full = dictBuffer.toString()
-        post { VoiceAccessibilityService.instance?.commitDictation(full) }
+        post {
+            val kb = GolosRukiKeyboardService.instance
+            if (kb != null && kb.isActiveInput()) kb.commitDictation(full)
+            else VoiceAccessibilityService.instance?.commitDictation(full)
+        }
     }
 
     /** Диктовка обычного текста с поддержкой пунктуации и переносов. */
@@ -515,16 +519,53 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         }, 180)
     }
 
+    private var savedIme: String? = null
+
+    private fun imeReadyForAutoSwitch(): Boolean {
+        if (!SettingsStore.getAutoIme(this)) return false
+        if (checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) return false
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+        return imm.enabledInputMethodList.any { it.packageName == packageName }
+    }
+
+    private fun switchToVoiceIme() {
+        if (!imeReadyForAutoSwitch()) return
+        val ourId = "$packageName/.GolosRukiKeyboardService"
+        val cur = android.provider.Settings.Secure.getString(contentResolver,
+            android.provider.Settings.Secure.DEFAULT_INPUT_METHOD)
+        if (cur == ourId) return
+        savedIme = cur
+        runCatching {
+            android.provider.Settings.Secure.putString(contentResolver,
+                android.provider.Settings.Secure.DEFAULT_INPUT_METHOD, ourId)
+            Logger.log("IME", "Включена голосовая клавиатура")
+        }
+    }
+
+    private fun switchBackIme() {
+        val prev = savedIme ?: return
+        savedIme = null
+        runCatching {
+            android.provider.Settings.Secure.putString(contentResolver,
+                android.provider.Settings.Secure.DEFAULT_INPUT_METHOD, prev)
+            Logger.log("IME", "Возврат обычной клавиатуры")
+        }
+    }
+
     fun enterDictation(digits: Boolean = false) {
         val alreadyDictating = dictation
         dictation = true
+        switchToVoiceIme()   // во время диктовки — наша клавиатура (если настроена)
         dictationDigits = digits
         // При первом входе — забираем уже имеющийся текст поля, чтобы не стереть его.
         // При переключении режима (текст↔цифры) — буфер НЕ трогаем.
         if (!alreadyDictating) {
             // Чистый старт: очищаем поле, чтобы не подмешивалась подсказка («Сообщение») или старый текст.
             dictBuffer.setLength(0)
-            VoiceAccessibilityService.instance?.beginDictationField()
+            val kb = GolosRukiKeyboardService.instance
+            if (kb != null && kb.isActiveInput()) kb.beginDictation()
+            else VoiceAccessibilityService.instance?.beginDictationField()
         }
         VoiceAccessibilityService.instance?.setStatusIcon(if (digits) OverlayView.Icon.DIGITS else OverlayView.Icon.PEN)
         VoiceAccessibilityService.instance?.showStatus(stateText())
@@ -536,6 +577,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         dictation = false
         dictationDigits = false
         dictBuffer.setLength(0)
+        switchBackIme()   // вернуть обычную клавиатуру
         VoiceAccessibilityService.instance?.setStatusIcon(OverlayView.Icon.DOT)
         VoiceAccessibilityService.instance?.showStatus("Команды активны")
         restartListening()   // обратно на малую + грамматику (быстро)

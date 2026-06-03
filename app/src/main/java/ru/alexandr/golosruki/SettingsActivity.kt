@@ -30,6 +30,7 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var aiStyleCheck: android.widget.Switch
     private lateinit var aiVoiceCheck: android.widget.Switch
     private lateinit var aiEngineCheck: android.widget.Switch
+    private lateinit var autoImeCheck: android.widget.Switch
     private lateinit var sosNum2: EditText
     private lateinit var voiceSpinner: android.widget.Spinner
     private lateinit var pitchBar: android.widget.SeekBar
@@ -222,6 +223,20 @@ class SettingsActivity : ComponentActivity() {
         )
         oc.addView(UiKit.button(this, "➕ Добавить команду") { addOpenRow("", "") })
         col.addView(oc)
+
+        // --- Клавиатура ГолосРуки (IME) ---
+        val kbc = UiKit.card(this)
+        kbc.addView(UiKit.sectionHeader(this, "⌨️ Диктовка везде"))
+        kbc.addView(UiKit.body(this, "Чтобы диктовка писала в любом приложении (браузер, заметки, сайты), включается голосовая клавиатура. При «Иван, диктовка» она включается сама и сама возвращает обычную клавиатуру. Нужна разовая настройка — в мастере."))
+        autoImeCheck = UiKit.switchView(this).apply {
+            text = "Авто-клавиатура во время диктовки"; textSize = 15f
+            isChecked = SettingsStore.getAutoIme(this@SettingsActivity)
+        }
+        kbc.addView(autoImeCheck)
+        kbc.addView(UiKit.button(this, "⚙️ Открыть мастер настройки") {
+            startActivity(android.content.Intent(this, SetupActivity::class.java))
+        })
+        col.addView(kbc)
 
         // --- ИИ-помощник (преднастройка) ---
         val aiP = AiProfile.load(this)
@@ -441,6 +456,7 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setConfirmCalls(this, confirmCheck.isChecked)
         SettingsStore.setBtMic(this, btMicCheck.isChecked)
         SettingsStore.setNoiseSuppress(this, noiseCheck.isChecked)
+        SettingsStore.setAutoIme(this, autoImeCheck.isChecked)
         AiProfile.save(this, AiProfile.Profile(
             enabled = aiEnableCheck.isChecked,
             name = aiNameField.text.toString().trim(),

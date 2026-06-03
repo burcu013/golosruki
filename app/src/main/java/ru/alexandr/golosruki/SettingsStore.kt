@@ -122,6 +122,9 @@ object SettingsStore {
     fun setAiEngine(ctx: Context, v: String) = p(ctx).edit().putString("ai_engine", v).apply()
     fun getAiCaps(ctx: Context): String = p(ctx).getString("ai_caps", "") ?: ""
     fun setAiCaps(ctx: Context, v: String) = p(ctx).edit().putString("ai_caps", v).apply()
+    // Авто-переключение на голосовую клавиатуру во время диктовки (нужно разрешение WRITE_SECURE_SETTINGS)
+    fun getAutoIme(ctx: Context): Boolean = p(ctx).getBoolean("auto_ime", true)
+    fun setAutoIme(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("auto_ime", v).apply()
 
     /** Карта персональных триггеров/коррекций: фраза → ключ команды. */
     fun getAliasMap(ctx: Context): Map<String, String> {

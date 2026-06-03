@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -22,6 +23,7 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
 
     <application
         android:allowBackup="true"
@@ -53,6 +55,7 @@
         <activity android:name=".GuideActivity" android:exported="false" />
         <activity android:name=".SettingsActivity" android:exported="false" />
         <activity android:name=".DevModeActivity" android:exported="false" />
+        <activity android:name=".SetupActivity" android:exported="false" />
 
         <!-- Активность пробуждения/разблокировки экрана -->
         <activity
@@ -84,6 +87,20 @@
             android:name=".VoiceRecognitionService"
             android:foregroundServiceType="microphone"
             android:exported="false" />
+
+        <!-- Клавиатура (IME): надёжный ввод текста и диктовка в любом приложении -->
+        <service
+            android:name=".GolosRukiKeyboardService"
+            android:label="ГолосРуки"
+            android:permission="android.permission.BIND_INPUT_METHOD"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
 
 
         <receiver

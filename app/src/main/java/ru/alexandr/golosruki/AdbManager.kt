@@ -75,10 +75,22 @@ class AdbManager private constructor() : AbsAdbConnectionManager() {
         fun pairAndGrant(context: Context, host: String, pairPort: Int, code: String): String {
             ensureConscrypt()
             val m = getInstance()
-            val paired = m.pair(host, pairPort, code)
-            if (!paired) return "Сопряжение не удалось. Проверьте адрес, порт и код."
+            // Перебираем адрес mDNS + все локальные интерфейсы (вкл. VPN/tun, напр. 10.0.0.1) + loopback
+            val hosts = candidateHosts(host)
+            var paired = false
+            var pairedHost = ""
+            var lastErr = ""
+            for (h in hosts) {
+                try {
+                    if (m.pair(h, pairPort, code)) { paired = true; pairedHost = h; break }
+                } catch (e: Throwable) {
+                    lastErr = e.message ?: e.javaClass.simpleName
+                    // ECONNREFUSED на неверном интерфейсе — пробуем следующий
+                }
+            }
+            if (!paired) return "Не удалось сопрячься ни по одному адресу (порт $pairPort). Проверьте код (он одноразовый — берите свежий) и что окно сопряжения открыто. Последняя ошибка: ${lastErr.take(120)}"
             val connected = m.autoConnect(context, 15_000)
-            if (!connected) return "Сопряжение прошло, но подключиться не удалось. Беспроводная отладка должна оставаться включённой."
+            if (!connected) return "Сопряжение прошло ($pairedHost), но подключиться не удалось. Беспроводная отладка должна оставаться включённой."
             val cmd = "pm grant ru.alexandr.golosruki android.permission.WRITE_SECURE_SETTINGS; echo DONE"
             val stream: AdbStream = m.openStream("shell:$cmd")
             val out = stream.openInputStream().bufferedReader().use { it.readText() }
@@ -86,6 +98,23 @@ class AdbManager private constructor() : AbsAdbConnectionManager() {
             runCatching { m.close() }
             return if (out.contains("DONE")) "Готово ✅ Разрешение выдано. Можно пользоваться диктовкой везде."
                 else "Команда выполнена, проверьте статус. Ответ: ${out.trim().take(200)}"
+        }
+
+        /** Кандидаты на адрес сопряжения: введённый/найденный + все локальные IPv4 + loopback. */
+        private fun candidateHosts(preferred: String?): List<String> {
+            val out = LinkedHashSet<String>()
+            preferred?.trim()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
+            runCatching {
+                java.net.NetworkInterface.getNetworkInterfaces().toList().forEach { ni ->
+                    if (ni.isUp && !ni.isLoopback) {
+                        ni.inetAddresses.toList().forEach { addr ->
+                            if (addr is java.net.Inet4Address) addr.hostAddress?.let { out.add(it) }
+                        }
+                    }
+                }
+            }
+            out.add("127.0.0.1")
+            return out.toList()
         }
     }
 }

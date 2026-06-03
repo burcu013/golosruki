@@ -684,10 +684,29 @@ class VoiceAccessibilityService : AccessibilityService() {
     }
 
     private fun pressEnter() {
-        val node = focusedEditable() ?: return
-        if (Build.VERSION.SDK_INT >= 30)
+        // 1) Ищем кнопку отправки (мессенджеры) по надписи/описанию и жмём её.
+        val root = rootInActiveWindow
+        if (root != null) {
+            for (kw in listOf("отправить сообщение", "отправить", "send message", "отправ", "послать", "send")) {
+                val n = searchByText(root, kw) ?: continue
+                val c = clickableAncestor(n) ?: n
+                if (c.isVisibleToUser && (c.isClickable || clickableAncestor(c) != null)) {
+                    val target = if (c.isClickable) c else (clickableAncestor(c) ?: c)
+                    if (!target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                        val r = android.graphics.Rect(); target.getBoundsInScreen(r)
+                        doTap(r.exactCenterX(), r.exactCenterY(), TapKind.SINGLE)
+                    }
+                    Logger.log("ACC", "Отправка: кнопка «$kw»")
+                    return
+                }
+            }
+        }
+        // 2) Иначе — действие Enter/Отправить у самого поля ввода.
+        val node = focusedEditable()
+        if (node != null && Build.VERSION.SDK_INT >= 30) {
             node.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
-        else showStatus("Enter недоступен на этой версии Android")
+            Logger.log("ACC", "Отправка: IME-Enter по полю")
+        } else showStatus("Не нашёл, куда отправить")
     }
 
     // --- Запуск приложения ---

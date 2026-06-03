@@ -30,6 +30,47 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var aiStyleCheck: android.widget.Switch
     private lateinit var aiVoiceCheck: android.widget.Switch
     private lateinit var aiEngineCheck: android.widget.Switch
+    private lateinit var aiModelStatus: TextView
+
+    private val pickModel = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) copyModel(uri) }
+
+    private fun refreshModelStatus() {
+        if (!::aiModelStatus.isInitialized) return
+        val f = MediaPipeEngine.modelFile(this)
+        aiModelStatus.text = if (MediaPipeEngine.modelInstalled(this))
+            "Модель установлена ✅ (${f.length() / (1024 * 1024)} МБ)"
+        else "Модель не установлена ❌"
+    }
+
+    private fun copyModel(uri: android.net.Uri) {
+        aiModelStatus.text = "Копирую модель… не закрывайте экран."
+        Thread {
+            val dst = MediaPipeEngine.modelFile(this)
+            val res = runCatching {
+                dst.parentFile?.mkdirs()
+                val tmp = java.io.File(dst.parentFile, "model.task.part")
+                contentResolver.openInputStream(uri)!!.use { input ->
+                    tmp.outputStream().use { out ->
+                        val buf = ByteArray(1 shl 20)
+                        var total = 0L; var n: Int
+                        while (input.read(buf).also { n = it } > 0) {
+                            out.write(buf, 0, n); total += n
+                            if (total % (50L * 1024 * 1024) < (1 shl 20))
+                                runOnUiThread { aiModelStatus.text = "Копирую… ${total / (1024 * 1024)} МБ" }
+                        }
+                    }
+                }
+                if (dst.exists()) dst.delete()
+                tmp.renameTo(dst)
+            }
+            runOnUiThread {
+                if (res.isSuccess) { LocalAi.engine.unload(); refreshModelStatus() }
+                else aiModelStatus.text = "Не удалось скопировать: ${res.exceptionOrNull()?.message}"
+            }
+        }.start()
+    }
     private lateinit var autoImeCheck: android.widget.Switch
     private lateinit var sosNum2: EditText
     private lateinit var voiceSpinner: android.widget.Spinner
@@ -283,7 +324,17 @@ class SettingsActivity : ComponentActivity() {
             text = "Топ-режим (MediaPipe, для мощных телефонов)"; textSize = 15f; isChecked = aiP.engine == "top"
         }
         ai.addView(aiEngineCheck)
-        ai.addView(UiKit.hint(this, "🔌 Универсальный режим (по умолчанию) — llama.cpp, работает на большинстве телефонов. Топ-режим — MediaPipe, быстрее на мощных. Модель ИИ скачивается отдельно (появится на следующем этапе)."))
+        ai.addView(UiKit.hint(this, "🔌 Универсальный режим — llama.cpp (позже). Топ-режим — MediaPipe (подключён). Модель скачивается отдельно (см. ниже)."))
+
+        // --- Модель ИИ (этап 1: Gemma-3 1B int4) ---
+        ai.addView(UiKit.sectionHeader(this, "📦 Модель ИИ"))
+        aiModelStatus = UiKit.body(this, "")
+        ai.addView(aiModelStatus)
+        ai.addView(UiKit.button(this, "📥 Выбрать файл модели (.task)") {
+            runCatching { pickModel.launch(arrayOf("*/*")) }
+                .onFailure { aiModelStatus.text = "Не удалось открыть выбор файла." }
+        })
+        ai.addView(UiKit.hint(this, "Где взять (для теста — самая лёгкая): Gemma-3 1B int4 (.task, ~550 МБ) с huggingface.co (нужен бесплатный аккаунт и согласие с лицензией Gemma), либо через приложение Google AI Edge Gallery. Скачайте файл, затем нажмите кнопку выше и выберите его — приложение скопирует модель к себе (это разовая операция, может занять минуту). Телефон должен быть достаточно мощным."))
         col.addView(ai)
 
         // --- Голос озвучки ---
@@ -336,6 +387,12 @@ class SettingsActivity : ComponentActivity() {
         col.addView(UiKit.button(this, "💾 Сохранить и перезапустить", R.drawable.btn_amber) { save() })
 
         setContentView(ScrollView(this).apply { addView(col) })
+        refreshModelStatus()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshModelStatus()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

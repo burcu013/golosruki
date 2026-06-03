@@ -11,8 +11,8 @@ android {
         applicationId = "ru.alexandr.golosruki"
         minSdk = 26
         targetSdk = 34
-        versionCode = 52
-        versionName = "6.21"
+        versionCode = 56
+        versionName = "6.25"
     }
 
     buildTypes {
@@ -38,4 +38,7 @@ dependencies {
     // выравнено с транзитивной версией libadb (bcprov-jdk15to18:1.81), иначе дубли классов
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
     implementation("org.conscrypt:conscrypt-android:2.5.3")
+
+    // ИИ на устройстве (этап 1: самая лёгкая модель Gemma-3 1B int4)
+    implementation("com.google.mediapipe:tasks-genai:0.10.27")
 }

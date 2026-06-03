@@ -9,14 +9,22 @@ import android.content.Context
  */
 object LocalAi {
     @Volatile var engine: AiEngine = StubAiEngine()
+    @Volatile private var initialized = false
+
+    private fun ensureEngine(ctx: Context) {
+        if (initialized) return
+        initialized = true
+        engine = MediaPipeEngine(ctx.applicationContext)
+    }
 
     /** ask=true — вопрос; ask=false — сформулировать текст. Блокирующий вызов (в фоне). */
     fun answer(ctx: Context, ask: Boolean, userText: String): String {
+        ensureEngine(ctx)
         val profile = AiProfile.load(ctx)
         if (!profile.enabled) return "ИИ-помощник выключен. Включите его в настройках."
         if (userText.isBlank()) return "Не расслышал. Повторите, пожалуйста."
         if (!engine.isReady()) {
-            return "ИИ ещё не подключён — движок добавим на следующем шаге. Запрос я понял: «$userText»."
+            return "Модель ИИ не установлена. Откройте Настройки → ИИ → загрузить модель. Запрос понял: «$userText»."
         }
         val sys = AiProfile.buildSystemPrompt(profile)
         val prompt = if (ask) userText

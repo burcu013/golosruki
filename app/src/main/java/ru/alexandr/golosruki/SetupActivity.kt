@@ -97,10 +97,10 @@ class SetupActivity : ComponentActivity() {
         })
         col.addView(c1)
 
-        // Шаг 2 — разрешение через adb
+        // Шаг 2 — разрешение через adb (запасной способ — Termux)
         val c2 = UiKit.card(this)
-        c2.addView(UiKit.sectionHeader(this, "Шаг 2. Разрешение (один раз)"))
-        c2.addView(UiKit.body(this, "Включите «Беспроводную отладку» в разделе «Для разработчиков», затем в Termux выполните команды. Адрес, порт и код сопряжения показывает сама система."))
+        c2.addView(UiKit.sectionHeader(this, "Запасной способ: через Termux"))
+        c2.addView(UiKit.body(this, "Если способ ниже (автосопряжение) не сработал. Включите «Беспроводную отладку» в разделе «Для разработчиков», затем в Termux выполните команды. Адрес, порт и код сопряжения показывает сама система."))
         statusPerm = UiKit.body(this, "")
         c2.addView(statusPerm)
         c2.addView(UiKit.button(this, "Открыть «Для разработчиков»") {
@@ -117,7 +117,7 @@ class SetupActivity : ComponentActivity() {
 
         // Способ B — встроенный adb (без Termux)
         val cb = UiKit.card(this)
-        cb.addView(UiKit.sectionHeader(this, "Способ B — без Termux"))
+        cb.addView(UiKit.sectionHeader(this, "Шаг 2 (рекомендуется): разрешение без Termux"))
         cb.addView(UiKit.body(this, "Включите «Беспроводную отладку». Затем нажмите кнопку ниже и откройте «Подключить с помощью кода подключения» — приложение само найдёт окно, а код вы введёте через уведомление, НЕ закрывая окно сопряжения."))
         autoResult = UiKit.body(this, "")
         cb.addView(autoResult)

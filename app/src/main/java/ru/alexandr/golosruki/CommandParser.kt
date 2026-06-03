@@ -20,6 +20,10 @@ object CommandParser {
         // 0.0 Персональные триггеры/коррекции (супер-режим, дообучение) — высший приоритет
         CommandAliases.match(t)?.let { return it }
 
+        // 0.05 ИИ-помощник — раньше SOS/звонка, чтобы «спроси»/«сформулируй» не путались
+        if (t.contains("сформулир")) return Command.AiCompose
+        if (t.contains("спроси") || t.contains("спросить")) return Command.AiAsk
+
         // 0. Разблокировка («привет» после «Иван»)
         if (t.contains("привет")) return Command.Unlock
 

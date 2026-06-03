@@ -146,6 +146,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var state = State.ASLEEP
     @Volatile private var dictation = false
     @Volatile private var dictationDigits = false
+    @Volatile var aiListening = false      // идёт свободный захват вопроса/текста для ИИ
+    @Volatile private var aiAsk = true     // true — вопрос, false — сформулировать текст
     private val dictBuffer = StringBuilder()
     @Volatile private var mediaControlMode = false
     private var mediaCode = "медиа"
@@ -330,7 +332,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     private fun flushDictation() {
         val full = dictBuffer.toString()
-        post { VoiceAccessibilityService.instance?.setFieldText(full) }
+        post { VoiceAccessibilityService.instance?.commitDictation(full) }
     }
 
     /** Диктовка обычного текста с поддержкой пунктуации и переносов. */
@@ -489,8 +491,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         listeningStop()
         handler.postDelayed({
             val m = model ?: return@postDelayed
-            val rec = if (dictation) {
-                Recognizer(m, 16000.0f)   // диктовка — всегда быстрая малая модель (качество добьёт ИИ-постобработка)
+            val rec = if (dictation || aiListening) {
+                Recognizer(m, 16000.0f)   // диктовка/вопрос ИИ — свободное распознавание (без грамматики)
             } else {
                 Recognizer(m, 16000.0f, Vocabulary.buildGrammar(personal, wakeWord, mediaCode))
             }
@@ -520,7 +522,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (!alreadyDictating) {
             // Чистый старт: очищаем поле, чтобы не подмешивалась подсказка («Сообщение») или старый текст.
             dictBuffer.setLength(0)
-            VoiceAccessibilityService.instance?.clearField()
+            VoiceAccessibilityService.instance?.beginDictationField()
         }
         VoiceAccessibilityService.instance?.setStatusIcon(if (digits) OverlayView.Icon.DIGITS else OverlayView.Icon.PEN)
         val hint = if (digits) "Диктовка цифрами: говорите номер, «готово» — выход"
@@ -538,6 +540,37 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         VoiceAccessibilityService.instance?.showStatus("Команды активны")
         restartListening()   // обратно на малую + грамматику (быстро)
         resetIdle(); refreshNotification()
+    }
+
+    /** Старт свободного захвата вопроса/текста для ИИ (после «Иван спроси…» / «Иван сформулируй…»). */
+    fun startAiQuery(ask: Boolean) {
+        if (!AiProfile.load(this).enabled) {
+            VoiceAccessibilityService.instance?.showStatus("🧠 ИИ выключен — включите в настройках")
+            speak("ИИ-помощник выключен. Включите его в настройках.")
+            return
+        }
+        aiAsk = ask
+        aiListening = true
+        val hint = if (ask) "🧠 Слушаю вопрос — говорите" else "🧠 Что сформулировать — говорите"
+        VoiceAccessibilityService.instance?.showStatus(hint)
+        Logger.log("AI", "Захват ${if (ask) "вопроса" else "текста"} для ИИ")
+        restartListening()   // свободное распознавание
+        resetIdle()
+    }
+
+    private fun handleAi(ask: Boolean, query: String) {
+        VoiceAccessibilityService.instance?.showStatus("🧠 Думаю…")
+        Logger.log("AI", "Запрос (${if (ask) "спроси" else "сформулируй"}): '$query'")
+        Thread {
+            val answer = LocalAi.answer(this, ask, query)
+            post {
+                Logger.log("AI", "Ответ: '$answer'")
+                VoiceAccessibilityService.instance?.showStatus("🧠 $answer")
+                if (AiProfile.load(this).voiceAnswers) speak(answer)
+                restartListening()   // вернуться к командам
+                resetIdle()
+            }
+        }.start()
     }
 
     private fun resetIdle() {
@@ -643,6 +676,19 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         }
 
         Logger.log("REC", "Распознано: '$text' (state=$state, paused=$paused, dict=$dictation)")
+
+        // Свободный захват вопроса/текста для ИИ
+        if (aiListening) {
+            if (text.isBlank()) { resetIdle(); return }
+            if (text.contains("стоп") || text.contains("отмена") || text.contains(wakeWord)) {
+                aiListening = false
+                VoiceAccessibilityService.instance?.showStatus(stateText())
+                restartListening(); return
+            }
+            aiListening = false
+            handleAi(aiAsk, text.trim())
+            return
+        }
 
         if (dictation) {
             // Гарантированный выход: слово активации, «стоп», «отмена», «готово», «конец»

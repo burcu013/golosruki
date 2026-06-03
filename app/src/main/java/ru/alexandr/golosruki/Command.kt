@@ -44,6 +44,8 @@ sealed class Command {
     object DictationDigits : Command()        // диктовка цифрами (телефон)
     data class Drag(val from: Int, val to: Int) : Command()   // перетащить элемент N на M
     data class ScrollEdge(val direction: Direction) : Command() // листать до конца
+    object AiAsk : Command()                   // «Иван спроси …» — вопрос к ИИ (вопрос захватывается свободно)
+    object AiCompose : Command()               // «Иван сформулируй …» — ИИ собирает текст
     object Paste : Command()                  // вставить из буфера
     object TapCenter : Command()              // тап по центру экрана (пауза/плей в плеерах)
     data class TapText(val label: String) : Command()        // нажать кнопку по надписи

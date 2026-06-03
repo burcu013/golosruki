@@ -176,6 +176,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         const val NOTIF_ID = 1
         const val ACTION_RESET = "ru.alexandr.golosruki.RESET"
         const val ACTION_RELOAD = "ru.alexandr.golosruki.RELOAD"   // перезагрузить модель (после смены пакета)
+        const val ACTION_APPLY = "ru.alexandr.golosruki.APPLY"     // применить настройки на лету (без пересоздания службы)
         @Volatile var instance: VoiceRecognitionService? = null
         @Volatile private var paused = false
         fun setPaused(p: Boolean) {
@@ -190,8 +191,35 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         when (intent?.action) {
             ACTION_RESET -> resetState()
             ACTION_RELOAD -> reloadModel()
+            ACTION_APPLY -> applySettings()
         }
         return START_STICKY
+    }
+
+    /** Применить настройки на лету: перечитать конфиг и перезапустить распознавание.
+     *  Надёжнее, чем stop/start службы (та может не пересоздаться и не перечитать поля). */
+    fun applySettings() {
+        personal = PersonalConfig.load(this)
+        wakeWord = SettingsStore.getWake(this)
+        idleMs = SettingsStore.getIdle(this) * 1000L
+        ignoreMedia = SettingsStore.getIgnoreMedia(this)
+        vibrateOnWake = SettingsStore.getVibrate(this)
+        keepScreen = SettingsStore.getKeepScreen(this)
+        mediaCode = SettingsStore.getMediaCode(this).lowercase().trim()
+        if (mediaCode == "видео") { mediaCode = "медиа"; SettingsStore.setMediaCode(this, "медиа") }
+        mediaWindowMs = SettingsStore.getMediaWindowSec(this) * 1000L
+        ttsEnabled = SettingsStore.getTts(this)
+        confirmCalls = SettingsStore.getConfirmCalls(this)
+        ttsPitch = SettingsStore.getTtsPitch(this)
+        ttsRate = SettingsStore.getTtsRate(this)
+        ttsVoiceName = SettingsStore.getTtsVoice(this)
+        CommandAliases.aliasMap = SettingsStore.getAliasMap(this)
+        useNoiseSuppress = SettingsStore.getNoiseSuppress(this)
+        bigForDictation = SettingsStore.getBigModel(this) && ModelDownloader.isReady(this)
+        Logger.log("CFG", "Настройки применены: слово='$wakeWord', сон=${idleMs/1000}с, медиа-игнор=$ignoreMedia, шумоподавление=$useNoiseSuppress")
+        if (model != null && !dictation) restartListening()
+        refreshNotification()
+        VoiceAccessibilityService.instance?.showStatus("Настройки применены")
     }
 
     /** Перезагрузка модели (например, после скачивания большой). */

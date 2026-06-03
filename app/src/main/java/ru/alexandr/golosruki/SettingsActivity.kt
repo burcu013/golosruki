@@ -467,8 +467,7 @@ class SettingsActivity : ComponentActivity() {
         }
         SettingsStore.setOpenCommands(this, openCmds)
 
-        val intent = Intent(this, VoiceRecognitionService::class.java)
-        stopService(intent)
+        val intent = Intent(this, VoiceRecognitionService::class.java).setAction(VoiceRecognitionService.ACTION_APPLY)
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
 
         Toast.makeText(this, "Сохранено и применено", Toast.LENGTH_SHORT).show()

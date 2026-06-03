@@ -85,11 +85,6 @@
             android:foregroundServiceType="microphone"
             android:exported="false" />
 
-        <!-- Foreground-служба: фоновая загрузка большой модели -->
-        <service
-            android:name=".ModelDownloadService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
 
         <receiver
             android:name=".BootReceiver"

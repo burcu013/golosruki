@@ -83,8 +83,6 @@ object SettingsStore {
     fun getKeepScreen(ctx: Context): Boolean = p(ctx).getBoolean("keep_screen", true)
     fun setKeepScreen(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("keep_screen", v).apply()
 
-    fun getBigModel(ctx: Context): Boolean = p(ctx).getBoolean("big_model", false)
-    fun setBigModel(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("big_model", v).apply()
 
     fun getMediaCode(ctx: Context): String = p(ctx).getString("media_code", "медиа")?.ifBlank { "медиа" } ?: "медиа"
     fun setMediaCode(ctx: Context, v: String) = p(ctx).edit().putString("media_code", v.trim()).apply()
@@ -104,6 +102,26 @@ object SettingsStore {
 
     fun getNoiseSuppress(ctx: Context): Boolean = p(ctx).getBoolean("noise_suppress", false)
     fun setNoiseSuppress(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("noise_suppress", v).apply()
+
+    // --- Профиль ИИ-помощника (входит в экспорт/импорт автоматически) ---
+    fun getAiEnabled(ctx: Context): Boolean = p(ctx).getBoolean("ai_enabled", false)
+    fun setAiEnabled(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("ai_enabled", v).apply()
+    fun getAiName(ctx: Context): String = p(ctx).getString("ai_name", "") ?: ""
+    fun setAiName(ctx: Context, v: String) = p(ctx).edit().putString("ai_name", v).apply()
+    fun getAiMode(ctx: Context): String = p(ctx).getString("ai_mode", "aid") ?: "aid"
+    fun setAiMode(ctx: Context, v: String) = p(ctx).edit().putString("ai_mode", v).apply()
+    fun getAiNotes(ctx: Context): String = p(ctx).getString("ai_notes", "") ?: ""
+    fun setAiNotes(ctx: Context, v: String) = p(ctx).edit().putString("ai_notes", v).apply()
+    fun getAiGoals(ctx: Context): String = p(ctx).getString("ai_goals", "") ?: ""
+    fun setAiGoals(ctx: Context, v: String) = p(ctx).edit().putString("ai_goals", v).apply()
+    fun getAiStyle(ctx: Context): String = p(ctx).getString("ai_style", "short") ?: "short"
+    fun setAiStyle(ctx: Context, v: String) = p(ctx).edit().putString("ai_style", v).apply()
+    fun getAiVoice(ctx: Context): Boolean = p(ctx).getBoolean("ai_voice", true)
+    fun setAiVoice(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("ai_voice", v).apply()
+    fun getAiEngine(ctx: Context): String = p(ctx).getString("ai_engine", "universal") ?: "universal"
+    fun setAiEngine(ctx: Context, v: String) = p(ctx).edit().putString("ai_engine", v).apply()
+    fun getAiCaps(ctx: Context): String = p(ctx).getString("ai_caps", "") ?: ""
+    fun setAiCaps(ctx: Context, v: String) = p(ctx).edit().putString("ai_caps", v).apply()
 
     /** Карта персональных триггеров/коррекций: фраза → ключ команды. */
     fun getAliasMap(ctx: Context): Map<String, String> {

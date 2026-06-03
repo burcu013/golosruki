@@ -21,6 +21,15 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var confirmCheck: android.widget.Switch
     private lateinit var btMicCheck: android.widget.Switch
     private lateinit var noiseCheck: android.widget.Switch
+    private lateinit var aiEnableCheck: android.widget.Switch
+    private lateinit var aiNameField: EditText
+    private lateinit var aiModeCheck: android.widget.Switch
+    private lateinit var aiNotesField: EditText
+    private lateinit var aiGoalChecks: List<android.widget.Switch>
+    private lateinit var aiCapChecks: List<android.widget.Switch>
+    private lateinit var aiStyleCheck: android.widget.Switch
+    private lateinit var aiVoiceCheck: android.widget.Switch
+    private lateinit var aiEngineCheck: android.widget.Switch
     private lateinit var sosNum2: EditText
     private lateinit var voiceSpinner: android.widget.Spinner
     private lateinit var pitchBar: android.widget.SeekBar
@@ -47,8 +56,6 @@ class SettingsActivity : ComponentActivity() {
         box.addView(f)
         return f
     }
-    private lateinit var bigModelCheck: android.widget.Switch
-    private lateinit var modelStatus: android.widget.TextView
     private val nameFields = mutableListOf<EditText>()
     private val numberFields = mutableListOf<EditText>()
     private val openPhraseFields = mutableListOf<EditText>()
@@ -216,35 +223,53 @@ class SettingsActivity : ComponentActivity() {
         oc.addView(UiKit.button(this, "➕ Добавить команду") { addOpenRow("", "") })
         col.addView(oc)
 
-        // --- Точность распознавания (большая модель) ---
-        val mc = UiKit.card(this)
-        mc.addView(UiKit.sectionHeader(this, "Точность распознавания"))
-        mc.addView(UiKit.body(this, "Большая модель (≈1.8 ГБ) используется ТОЛЬКО для голосового набора текста (диктовки) — там она пишет грамотнее. Команды всегда работают на быстрой малой модели, поэтому приложение не тормозит. Загрузка в фоне, с авто-докачкой и отменой; нужно ~4 ГБ места. При первой диктовке после включения возможна пауза в пару секунд на загрузку."))
-        bigModelCheck = UiKit.switchView(this).apply {
-            text = "Большая модель для диктовки текста"; textSize = 15f
-            isChecked = SettingsStore.getBigModel(this@SettingsActivity)
-            isEnabled = ModelDownloader.isReady(this@SettingsActivity)
+        // --- ИИ-помощник (преднастройка) ---
+        val aiP = AiProfile.load(this)
+        val ai = UiKit.card(this)
+        ai.addView(UiKit.sectionHeader(this, "🤖 ИИ-помощник (бета)"))
+        ai.addView(UiKit.body(this, "Офлайн-ИИ для ответов на вопросы и «причёсывания» диктовки. Здесь — преднастройка под вас; сам движок (модель) подключается на следующем этапе. Управление телефоном всегда остаётся на быстрых командах."))
+        aiEnableCheck = UiKit.switchView(this).apply {
+            text = "Включить ИИ-помощника"; textSize = 15f; isChecked = aiP.enabled
         }
-        mc.addView(bigModelCheck)
-        modelStatus = UiKit.body(this, modelStatusText())
-        mc.addView(modelStatus)
-        mc.addView(UiKit.button(this, "⬇️ Скачать большую модель (1.8 ГБ)") {
-            val i = Intent(this, ModelDownloadService::class.java).setAction(ModelDownloadService.ACTION_START)
-            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
-            modelStatus.text = "Загрузка идёт в фоне — статус в шторке уведомлений. Можно свернуть приложение."
-            Toast.makeText(this, "Загрузка началась (в фоне)", Toast.LENGTH_SHORT).show()
-        })
-        mc.addView(UiKit.button(this, "✖️ Отменить загрузку", R.drawable.btn_danger) {
-            startService(Intent(this, ModelDownloadService::class.java).setAction(ModelDownloadService.ACTION_CANCEL))
-            modelStatus.text = "Загрузка отменена. Частично скачанное сохранено — повторная загрузка продолжит с места обрыва."
-        })
-        mc.addView(UiKit.button(this, "🗑 Удалить большую модель", R.drawable.btn_danger) {
-            ModelDownloader.delete(this)
-            SettingsStore.setBigModel(this, false)
-            bigModelCheck.isChecked = false; bigModelCheck.isEnabled = false
-            modelStatus.text = "Статус: большая модель удалена"
-        })
-        col.addView(mc)
+        ai.addView(aiEnableCheck)
+        ai.addView(UiKit.body(this, "Имя (как к вам обращаться):"))
+        aiNameField = field(android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_WORDS).apply {
+            setText(aiP.name); hint = "Например: Александр"
+        }
+        ai.addView(aiNameField)
+        aiModeCheck = UiKit.switchView(this).apply {
+            text = "Режим спец-доступа (управление только голосом)"; textSize = 15f
+            isChecked = aiP.mode == "aid"
+        }
+        ai.addView(aiModeCheck)
+        ai.addView(UiKit.body(this, "Возможности (ИИ подстроит ответы под вас):"))
+        aiCapChecks = AiProfile.CAPS.map { c ->
+            UiKit.switchView(this).apply { text = c; textSize = 15f; isChecked = aiP.capabilities.contains(c) }.also { ai.addView(it) }
+        }
+        ai.addView(UiKit.body(this, "Особенности (что важно учитывать ИИ):"))
+        aiNotesField = field(android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE).apply {
+            setText(aiP.notes); hint = "Например: отвечай коротко, я управляю голосом"
+            minLines = 2
+        }
+        ai.addView(aiNotesField)
+        ai.addView(UiKit.body(this, "Цели использования:"))
+        aiGoalChecks = AiProfile.GOALS.map { g ->
+            UiKit.switchView(this).apply { text = g; textSize = 15f; isChecked = aiP.goals.contains(g) }.also { ai.addView(it) }
+        }
+        aiStyleCheck = UiKit.switchView(this).apply {
+            text = "Подробные ответы (иначе — кратко)"; textSize = 15f; isChecked = aiP.style == "detailed"
+        }
+        ai.addView(aiStyleCheck)
+        aiVoiceCheck = UiKit.switchView(this).apply {
+            text = "Озвучивать ответы ИИ"; textSize = 15f; isChecked = aiP.voiceAnswers
+        }
+        ai.addView(aiVoiceCheck)
+        aiEngineCheck = UiKit.switchView(this).apply {
+            text = "Топ-режим (MediaPipe, для мощных телефонов)"; textSize = 15f; isChecked = aiP.engine == "top"
+        }
+        ai.addView(aiEngineCheck)
+        ai.addView(UiKit.hint(this, "🔌 Универсальный режим (по умолчанию) — llama.cpp, работает на большинстве телефонов. Топ-режим — MediaPipe, быстрее на мощных. Модель ИИ скачивается отдельно (появится на следующем этапе)."))
+        col.addView(ai)
 
         // --- Голос озвучки ---
         val vc = UiKit.card(this)
@@ -370,20 +395,6 @@ class SettingsActivity : ComponentActivity() {
         voiceTts = null
     }
 
-    private fun modelStatusText(): String = when {
-        ModelDownloader.running -> "Идёт фоновая загрузка — статус в шторке уведомлений"
-        ModelDownloader.isReady(this) -> "Статус: большая модель загружена ✅"
-        else -> "Статус: большая модель не загружена"
-    }
-
-    override fun onResume() {
-        super.onResume()
-        if (::modelStatus.isInitialized) {
-            modelStatus.text = modelStatusText()
-            bigModelCheck.isEnabled = ModelDownloader.isReady(this)
-            bigModelCheck.isChecked = SettingsStore.getBigModel(this) && ModelDownloader.isReady(this)
-        }
-    }
 
     private fun field(type: Int): EditText = EditText(this).apply {
         inputType = type
@@ -430,6 +441,17 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setConfirmCalls(this, confirmCheck.isChecked)
         SettingsStore.setBtMic(this, btMicCheck.isChecked)
         SettingsStore.setNoiseSuppress(this, noiseCheck.isChecked)
+        AiProfile.save(this, AiProfile.Profile(
+            enabled = aiEnableCheck.isChecked,
+            name = aiNameField.text.toString().trim(),
+            mode = if (aiModeCheck.isChecked) "aid" else "free",
+            notes = aiNotesField.text.toString().trim(),
+            goals = aiGoalChecks.indices.filter { aiGoalChecks[it].isChecked }.map { AiProfile.GOALS[it] }.toSet(),
+            style = if (aiStyleCheck.isChecked) "detailed" else "short",
+            voiceAnswers = aiVoiceCheck.isChecked,
+            engine = if (aiEngineCheck.isChecked) "top" else "universal",
+            capabilities = aiCapChecks.indices.filter { aiCapChecks[it].isChecked }.map { AiProfile.CAPS[it] }.toSet()
+        ))
         SettingsStore.setSosNumber2(this, sosNum2.text.toString())
         if (::pitchBar.isInitialized) SettingsStore.setTtsPitch(this, curPitch())
         if (::rateBar.isInitialized) SettingsStore.setTtsRate(this, curRate())
@@ -441,7 +463,6 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setIgnoreMedia(this, ignoreMediaCheck.isChecked)
         SettingsStore.setVibrate(this, vibrateCheck.isChecked)
         SettingsStore.setKeepScreen(this, keepScreenCheck.isChecked)
-        SettingsStore.setBigModel(this, bigModelCheck.isChecked && ModelDownloader.isReady(this))
         SettingsStore.setSwipeInvertV(this, invVCheck.isChecked)
         SettingsStore.setSwipeInvertH(this, invHCheck.isChecked)
         SettingsStore.setSwipeStrength(this, strengthField.text.toString().toIntOrNull()?.coerceIn(1, 5) ?: 2)

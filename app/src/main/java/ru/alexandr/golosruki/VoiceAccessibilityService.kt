@@ -41,7 +41,7 @@ class VoiceAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         overlay = OverlayController(this)
-        overlay.showStatus("Сон. Скажите: Иван")
+        overlay.showStatus("😴 Сон — скажите «Иван»")
         Logger.log("ACC", "Служба спец. возможностей ПОДКЛЮЧЕНА")
         // Автозапуск распознавания: спец.возможности система поднимает после перезагрузки сама,
         // поэтому отсюда стартуем голосовую службу — управление доступно сразу после ребута.
@@ -562,12 +562,52 @@ class VoiceAccessibilityService : AccessibilityService() {
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
         }
-        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        val sel = Bundle().apply {
-            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, text.length)
-            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, text.length)
+        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (ok) {
+            val sel = Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, text.length)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, text.length)
+            }
+            runCatching { node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel) }
+        } else {
+            // Запасной способ для приложений, не принимающих ACTION_SET_TEXT (заметки/блокноты и др.):
+            // через буфер обмена — выделить всё и вставить (замена содержимого).
+            pasteReplace(node, text)
         }
-        runCatching { node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel) }
+    }
+
+    /** Очистить поле ввода (старт диктовки «с чистого листа»). */
+    fun clearField() {
+        val node = focusedEditable() ?: return
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
+        }
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+            // если поле не принимает SET_TEXT — выделим всё и удалим вставкой пустого
+            runCatching {
+                val len = node.text?.length ?: 0
+                val sel = Bundle().apply {
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, len)
+                }
+                node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
+                node.performAction(AccessibilityNodeInfo.ACTION_CUT)
+            }
+        }
+    }
+
+    private fun pasteReplace(node: AccessibilityNodeInfo, text: String) {
+        runCatching {
+            val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("dictation", text))
+            val len = node.text?.length ?: 0
+            val sel = Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, len)
+            }
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
+            node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        }
     }
 
     fun typeText(text: String) {

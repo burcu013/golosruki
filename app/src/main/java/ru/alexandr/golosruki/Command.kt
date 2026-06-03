@@ -107,6 +107,8 @@ sealed class Command {
         Help -> "Помощь"
         Pause -> "Пауза"
         Resume -> "Слушаю"
+        AiAsk -> "🧠 Вопрос ИИ"
+        AiCompose -> "🧠 Сформулировать"
         Unknown -> "Не понял команду"
     }
 }

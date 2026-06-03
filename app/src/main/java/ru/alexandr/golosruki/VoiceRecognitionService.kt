@@ -46,6 +46,37 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var btReceiver: android.content.BroadcastReceiver? = null
     private fun enableBtMic() {
         btMicWanted = true
+        if (Build.VERSION.SDK_INT >= 31 && enableBtMicModern()) return
+        enableBtMicLegacy()
+    }
+
+    /** Новый API (Android 12+): маршрутизация захвата звука на BT-устройство связи. */
+    private fun enableBtMicModern(): Boolean {
+        return try {
+            val bt = audioManager.availableCommunicationDevices.firstOrNull {
+                it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+            }
+            if (bt == null) {
+                Logger.log("MIC", "BT-устройство связи не найдено (новый API) — пробую старый способ")
+                return false
+            }
+            val ok = audioManager.setCommunicationDevice(bt)
+            if (ok) {
+                btScoOn = true
+                Logger.log("MIC", "Bluetooth-микрофон активен (новый API): ${bt.productName}")
+                VoiceAccessibilityService.instance?.showStatus("🎧 Bluetooth-микрофон активен")
+                if (model != null) restartListening()
+            } else {
+                Logger.log("MIC", "setCommunicationDevice вернул false — пробую старый способ")
+            }
+            ok
+        } catch (e: Exception) {
+            Logger.log("MIC", "Новый BT API не сработал: ${e.message}"); false
+        }
+    }
+
+    /** Старый способ (Android < 12 либо если новый API не нашёл устройство): Bluetooth SCO. */
+    private fun enableBtMicLegacy() {
         runCatching {
             if (btReceiver == null) {
                 btReceiver = object : android.content.BroadcastReceiver() {
@@ -89,6 +120,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
     private fun disableBtMic() {
         btMicWanted = false; btScoOn = false
+        if (Build.VERSION.SDK_INT >= 31) runCatching { audioManager.clearCommunicationDevice() }
         runCatching { audioManager.isBluetoothScoOn = false; audioManager.stopBluetoothSco() }
         runCatching { btReceiver?.let { unregisterReceiver(it) } }; btReceiver = null
     }
@@ -382,6 +414,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         state == State.AWAKE -> "🎙 Слушаю команды"
         else -> "😴 Сон — скажите «${cap(wakeWord)}»"
     }
+
+    /** Базовый статус для авто-возврата оверлея (после кратких сообщений о командах). */
+    fun baseStatusText(): String = stateText()
 
     private fun buildNotification(text: String): Notification {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

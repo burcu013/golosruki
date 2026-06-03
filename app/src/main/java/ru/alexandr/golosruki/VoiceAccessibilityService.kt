@@ -60,8 +60,22 @@ class VoiceAccessibilityService : AccessibilityService() {
         instance = null
     }
 
+    private val statusHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var revertRunnable: Runnable? = null
+
     fun showStatus(text: String) {
         if (this::overlay.isInitialized) overlay.showStatus(text)
+        // Краткие сообщения о командах не должны «висеть» — через 4 c возвращаем базовый статус.
+        revertRunnable?.let { statusHandler.removeCallbacks(it) }
+        val base = VoiceRecognitionService.instance?.baseStatusText()
+        if (base != null && text != base) {
+            val r = Runnable {
+                val b = VoiceRecognitionService.instance?.baseStatusText() ?: return@Runnable
+                if (this::overlay.isInitialized) overlay.showStatus(b)
+            }
+            revertRunnable = r
+            statusHandler.postDelayed(r, 4000)
+        }
     }
     fun setStatusIcon(icon: OverlayView.Icon) {
         if (this::overlay.isInitialized) overlay.setStatusIcon(icon)

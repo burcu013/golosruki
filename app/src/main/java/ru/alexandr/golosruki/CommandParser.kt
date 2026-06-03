@@ -154,7 +154,7 @@ object CommandParser {
 
         // 2. Свайпы
         when {
-            t.contains("вверх") -> return Command.Swipe(Direction.UP, isFine(t))
+            t.contains("вверх") || t.contains("наверх") -> return Command.Swipe(Direction.UP, isFine(t))
             t.contains("вниз") -> return Command.Swipe(Direction.DOWN, isFine(t))
             t.contains("влево") -> return Command.Swipe(Direction.LEFT, isFine(t))
             t.contains("вправо") -> return Command.Swipe(Direction.RIGHT, isFine(t))
@@ -204,8 +204,10 @@ object CommandParser {
             t.contains("следующ") -> Command.MediaNext
             t.contains("предыдущ") -> Command.MediaPrev
             // короткие видео (шортс/рилс/клипы): листание и тап для паузы/плей
-            t.contains("вверх") -> Command.Swipe(Direction.UP)
+            t.contains("вверх") || t.contains("наверх") -> Command.Swipe(Direction.UP)
             t.contains("вниз") || t.contains("дальше") -> Command.Swipe(Direction.DOWN)
+            t.contains("влево") -> Command.Swipe(Direction.LEFT)
+            t.contains("вправо") -> Command.Swipe(Direction.RIGHT)
             t.contains("тап") || t.contains("центр") || t.contains("нажми") -> Command.TapCenter
             t.contains("назад") || t.contains("выход") || t.contains("закрой") -> Command.Back
             t.contains("домой") -> Command.Home

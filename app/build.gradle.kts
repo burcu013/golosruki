@@ -11,12 +11,25 @@ android {
         applicationId = "ru.alexandr.golosruki"
         minSdk = 26
         targetSdk = 34
-        versionCode = 62
-        versionName = "6.31"
+        versionCode = 64
+        versionName = "6.33"
+    }
+
+    signingConfigs {
+        create("stable") {
+            storeFile = file("golosruki.keystore")
+            storePassword = "golosruki"
+            keyAlias = "golosruki"
+            keyPassword = "golosruki"
+        }
     }
 
     buildTypes {
-        release { isMinifyEnabled = false }
+        debug { signingConfig = signingConfigs.getByName("stable") }
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("stable")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

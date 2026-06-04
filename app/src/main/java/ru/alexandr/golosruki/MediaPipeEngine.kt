@@ -32,7 +32,7 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
         return try {
             val opts = LlmInferenceOptions.builder()
                 .setModelPath(modelFile(appContext).absolutePath)
-                .setMaxTokens(512)
+                .setMaxTokens(1024)
                 .build()
             llm = LlmInference.createFromOptions(appContext, opts)
             loadError = null

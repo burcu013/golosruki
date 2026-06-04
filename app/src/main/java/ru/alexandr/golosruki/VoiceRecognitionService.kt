@@ -619,10 +619,14 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 val ok = answer.isNotBlank() && !answer.startsWith("Модель") &&
                     !answer.startsWith("ИИ-помощник выключен") && !answer.startsWith("Не удалось") &&
                     !answer.startsWith("Не расслышал")
+                val composedOk = !ask && ok
                 // «Сформулируй» — вставляем готовый текст в активное поле ввода
-                if (!ask && ok) insertComposed(answer)
+                if (composedOk) insertComposed(answer)
                 VoiceAccessibilityService.instance?.showStatus("🧠 $answer")
-                if (AiProfile.load(this).voiceAnswers) speak(answer)
+                if (AiProfile.load(this).voiceAnswers) {
+                    // Текст для вставки не зачитываем — он уже в поле; только подтверждаем.
+                    speak(if (composedOk) "Сгенерировал текст" else answer)
+                }
                 restartListening()   // вернуться к командам
                 resetIdle()
             }

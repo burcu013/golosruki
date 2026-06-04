@@ -106,8 +106,15 @@ object AdbAutoPair {
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setOngoing(false)
+            .setAutoCancel(true)
+            .setTimeoutAfter(12_000)   // само исчезнет через 12 c (чтобы не висело)
             .build()
         runCatching { NotificationManagerCompat.from(ctx).notify(NOTIF_ID, n) }
+    }
+
+    /** Убрать уведомление сопряжения (например, после успеха). */
+    fun cancelNotification(ctx: Context) {
+        runCatching { NotificationManagerCompat.from(ctx).cancel(NOTIF_ID) }
     }
 
     fun stop(ctx: Context) {

@@ -61,6 +61,7 @@
         <activity android:name=".DevModeActivity" android:exported="false" />
         <activity android:name=".SetupActivity" android:exported="false" />
         <activity android:name=".ModelsActivity" android:exported="false" />
+        <service android:name=".ModelDownloadService" android:exported="false" android:foregroundServiceType="dataSync" />
 
         <!-- Активность пробуждения/разблокировки экрана -->
         <activity

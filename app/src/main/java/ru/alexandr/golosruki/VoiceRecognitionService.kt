@@ -161,8 +161,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.postDelayed(screenOffMediaOff, mediaWindowMs)
     }
     private fun armMediaMode() {
+        // Медиа-режим держится до явного выключения командой «медиа» (или блокировки/выхода).
+        // Авто-таймаут убран: при простое включается сон, но медиа-режим сохраняется и
+        // возвращается после пробуждения.
         handler.removeCallbacks(mediaModeOff)
-        handler.postDelayed(mediaModeOff, 90_000L)
     }
     /** Принудительно выключить медиа-режим (выход из приложения, блокировка). */
     fun clearMediaMode() {
@@ -414,7 +416,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         dictation && dictationDigits -> "✍️ Диктовка цифрами — «готово» для выхода"
         dictation -> "✍️ Диктовка — говорите текст, «готово» для выхода"
         paused -> "⏸ Пауза — скажите «слушай»"
+        state == State.AWAKE && mediaControlMode -> "🎵 Медиа-режим: пауза/играй/треки/листание без «${cap(wakeWord)}»"
         state == State.AWAKE -> "🎙 Слушаю команды"
+        mediaControlMode -> "😴 Сон (медиа активен) — скажите «${cap(wakeWord)}»"
         else -> "😴 Сон — скажите «${cap(wakeWord)}»"
     }
 
@@ -697,9 +701,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             if (hasWake) {
                 Logger.log("MEDIA", "Активация при медиа: '$rest'")
                 if (paused) setPaused(false)
+                state = State.AWAKE
                 resetIdle()
-                if (mediaControlMode) armMediaMode()
-                if (rest.isBlank()) VoiceAccessibilityService.instance?.showStatus("🎙 Слушаю (медиа)")
+                if (mediaControlMode) VoiceAccessibilityService.instance?.setStatusIcon(OverlayView.Icon.MEDIA)
+                if (rest.isBlank()) VoiceAccessibilityService.instance?.showStatus(stateText())
                 else handleCommand(rest)
             } else if (mediaControlMode) {
                 val c = CommandParser.parseMedia(text)

@@ -1,5 +1,9 @@
 package ru.alexandr.golosruki
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Bundle
 import android.widget.EditText
@@ -7,9 +11,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.core.content.ContextCompat
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 
 /** Менеджер моделей ИИ: список (лёгкая → мощная), скачивание по токену HF, выбор активной. */
 class ModelsActivity : ComponentActivity() {
@@ -102,6 +105,34 @@ class ModelsActivity : ComponentActivity() {
 
     private fun llmDir(): File = File(filesDir, "llm").apply { mkdirs() }
 
+    private val dlReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context?, i: Intent?) { runOnUiThread { showDlState() } }
+    }
+
+    private fun showDlState() {
+        if (ModelDownloadService.active) {
+            status.text = "Фоновая загрузка: ${ModelDownloadService.statusText}"
+        } else {
+            when (val r = ModelDownloadService.lastResult) {
+                null -> {}
+                "OK" -> { refresh(); }
+                else -> status.text = "Загрузка не удалась: $r"
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        ContextCompat.registerReceiver(this, dlReceiver,
+            IntentFilter(ModelDownloadService.ACTION_PROGRESS), ContextCompat.RECEIVER_NOT_EXPORTED)
+        if (ModelDownloadService.active) showDlState() else refresh()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        runCatching { unregisterReceiver(dlReceiver) }
+    }
+
     private fun refresh() {
         val active = SettingsStore.getAiModelPath(this)
         val af = File(active)
@@ -157,60 +188,14 @@ class ModelsActivity : ComponentActivity() {
 
     private fun download(m: ModelDef) {
         val tok = SettingsStore.getHfToken(this)
-        status.text = "Скачиваю «${m.title}»…"
-        Thread {
-            val dst = File(llmDir(), m.file)
-            val tmp = File(llmDir(), m.file + ".part")
-            val res = runCatching {
-                var u = m.url
-                var conn = open(u, tok)
-                var hops = 0
-                while (conn.responseCode in 300..399 && hops < 6) {
-                    val loc = conn.getHeaderField("Location") ?: break
-                    conn.disconnect()
-                    u = loc
-                    // На CDN (не huggingface.co) токен не нужен и может мешать.
-                    conn = open(u, if (u.contains("huggingface.co")) tok else "")
-                    hops++
-                }
-                when (val code = conn.responseCode) {
-                    200 -> {}
-                    401, 403 -> throw RuntimeException("Нет доступа ($code). Проверьте токен HF и что приняли лицензию модели на huggingface.co.")
-                    404 -> throw RuntimeException("Файл не найден (404). Возможно, имя файла изменилось — используйте «Свою ссылку».")
-                    else -> throw RuntimeException("HTTP $code")
-                }
-                val total = conn.contentLengthLong
-                conn.inputStream.use { input ->
-                    tmp.outputStream().use { out ->
-                        val buf = ByteArray(1 shl 20); var done = 0L; var n: Int; var lastPct = -1
-                        while (input.read(buf).also { n = it } > 0) {
-                            out.write(buf, 0, n); done += n
-                            if (total > 0) {
-                                val pct = (done * 100 / total).toInt()
-                                if (pct != lastPct && pct % 2 == 0) { lastPct = pct; runOnUiThread { status.text = "Скачиваю «${m.title}»… $pct% (${done / 1048576} МБ)" } }
-                            } else runOnUiThread { status.text = "Скачиваю «${m.title}»… ${done / 1048576} МБ" }
-                        }
-                    }
-                }
-                conn.disconnect()
-                if (dst.exists()) dst.delete(); tmp.renameTo(dst); dst.absolutePath
-            }
-            runOnUiThread {
-                if (res.isSuccess) {
-                    SettingsStore.setAiModelPath(this, res.getOrThrow())
-                    LocalAi.engine.unload(); LocalAi.clearHistory(); refresh()
-                    status.text = "Готово ✅ «${m.title}» скачана и выбрана."
-                } else { tmp.delete(); status.text = "Не вышло: ${res.exceptionOrNull()?.message}" }
-            }
-        }.start()
-    }
-
-    private fun open(url: String, token: String): HttpURLConnection {
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.instanceFollowRedirects = false
-        c.connectTimeout = 30000; c.readTimeout = 120000
-        if (token.isNotBlank()) c.setRequestProperty("Authorization", "Bearer $token")
-        c.connect()
-        return c
+        val dest = File(llmDir(), m.file).absolutePath
+        val i = Intent(this, ModelDownloadService::class.java)
+            .putExtra(ModelDownloadService.EX_URL, m.url)
+            .putExtra(ModelDownloadService.EX_TOKEN, tok)
+            .putExtra(ModelDownloadService.EX_DEST, dest)
+            .putExtra(ModelDownloadService.EX_LABEL, m.title)
+        runCatching { startForegroundService(i) }
+            .onSuccess { status.text = "Загрузка «${m.title}» идёт в фоне — прогресс и скорость в шторке уведомлений. Окно можно закрыть." }
+            .onFailure { status.text = "Не удалось запустить загрузку: ${it.message}" }
     }
 }

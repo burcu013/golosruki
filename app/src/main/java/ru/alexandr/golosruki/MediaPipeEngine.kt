@@ -17,7 +17,7 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
     @Volatile private var loadError: String? = null
 
     companion object {
-        fun modelFile(ctx: Context): File = File(ctx.filesDir, "llm/model.task")
+        fun modelFile(ctx: Context): File = File(SettingsStore.getAiModelPath(ctx))
         /** Считаем модель установленной, если файл есть и весит разумно (>50 МБ). */
         fun modelInstalled(ctx: Context): Boolean =
             modelFile(ctx).let { it.exists() && it.length() > 50_000_000L }

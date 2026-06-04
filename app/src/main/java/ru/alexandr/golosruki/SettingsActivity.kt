@@ -48,9 +48,8 @@ class SettingsActivity : ComponentActivity() {
     private fun copyModel(uri: android.net.Uri) {
         aiModelStatus.text = "Копирую модель… не закрывайте экран."
         Thread {
-            val dst = MediaPipeEngine.modelFile(this)
+            val dst = java.io.File(java.io.File(filesDir, "llm").apply { mkdirs() }, "model.task")
             val res = runCatching {
-                dst.parentFile?.mkdirs()
                 val tmp = java.io.File(dst.parentFile, "model.task.part")
                 contentResolver.openInputStream(uri)!!.use { input ->
                     tmp.outputStream().use { out ->
@@ -65,10 +64,13 @@ class SettingsActivity : ComponentActivity() {
                 }
                 if (dst.exists()) dst.delete()
                 tmp.renameTo(dst)
+                dst.absolutePath
             }
             runOnUiThread {
-                if (res.isSuccess) { LocalAi.engine.unload(); refreshModelStatus() }
-                else aiModelStatus.text = "Не удалось скопировать: ${res.exceptionOrNull()?.message}"
+                if (res.isSuccess) {
+                    SettingsStore.setAiModelPath(this, res.getOrThrow())
+                    LocalAi.engine.unload(); LocalAi.clearHistory(); refreshModelStatus()
+                } else aiModelStatus.text = "Не удалось скопировать: ${res.exceptionOrNull()?.message}"
             }
         }.start()
     }
@@ -331,11 +333,14 @@ class SettingsActivity : ComponentActivity() {
         ai.addView(UiKit.sectionHeader(this, "📦 Модель ИИ"))
         aiModelStatus = UiKit.body(this, "")
         ai.addView(aiModelStatus)
+        ai.addView(UiKit.button(this, "📦 Менеджер моделей (скачать / выбрать)") {
+            startActivity(android.content.Intent(this, ModelsActivity::class.java))
+        })
         ai.addView(UiKit.button(this, "📥 Выбрать файл модели (.task)") {
             runCatching { pickModel.launch(arrayOf("*/*")) }
                 .onFailure { aiModelStatus.text = "Не удалось открыть выбор файла." }
         })
-        ai.addView(UiKit.hint(this, "Где взять (для теста — самая лёгкая): Gemma-3 1B int4 (.task, ~550 МБ) с huggingface.co (нужен бесплатный аккаунт и согласие с лицензией Gemma), либо через приложение Google AI Edge Gallery. Скачайте файл, затем нажмите кнопку выше и выберите его — приложение скопирует модель к себе (это разовая операция, может занять минуту). Телефон должен быть достаточно мощным."))
+        ai.addView(UiKit.hint(this, "В менеджере моделей: список от лёгкой (Gemma 1B, для теста) к мощной (Gemma 4B, рекомендуется), скачивание по токену HuggingFace прямо в приложении. 1B слаба в математике — для нормального качества берите 4B."))
         col.addView(ai)
 
         // --- Голос озвучки ---

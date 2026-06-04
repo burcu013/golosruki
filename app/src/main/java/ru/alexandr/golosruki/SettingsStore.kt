@@ -125,6 +125,13 @@ object SettingsStore {
     // Авто-переключение на голосовую клавиатуру во время диктовки (нужно разрешение WRITE_SECURE_SETTINGS)
     fun getAutoIme(ctx: Context): Boolean = p(ctx).getBoolean("auto_ime", true)
     fun setAutoIme(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("auto_ime", v).apply()
+    // Путь к активной модели ИИ (по умолчанию — llm/model.task в приватной папке)
+    fun getAiModelPath(ctx: Context): String =
+        p(ctx).getString("ai_model_path", null) ?: java.io.File(ctx.filesDir, "llm/model.task").absolutePath
+    fun setAiModelPath(ctx: Context, v: String) = p(ctx).edit().putString("ai_model_path", v).apply()
+    // Токен HuggingFace для скачивания закрытых моделей (Gemma)
+    fun getHfToken(ctx: Context): String = p(ctx).getString("hf_token", "") ?: ""
+    fun setHfToken(ctx: Context, v: String) = p(ctx).edit().putString("hf_token", v.trim()).apply()
 
     /** Карта персональных триггеров/коррекций: фраза → ключ команды. */
     fun getAliasMap(ctx: Context): Map<String, String> {

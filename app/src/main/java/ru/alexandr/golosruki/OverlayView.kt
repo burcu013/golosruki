@@ -54,7 +54,7 @@ class OverlayView(context: Context) : View(context) {
 
     fun setTargets(list: List<Target>, grid: Boolean) { targets = list; gridMode = grid; invalidate() }
     fun clearTargets() { targets = emptyList(); gridMode = false; invalidate() }
-    fun setStatus(text: String, maxLines: Int = 1) { status = text; statusMaxLines = maxLines.coerceIn(1, 3); invalidate() }
+    fun setStatus(text: String, maxLines: Int = 1) { status = text; statusMaxLines = maxLines.coerceIn(1, 5); invalidate() }
     fun setIcon(i: Icon) { icon = i; invalidate() }
 
     private fun wrap(text: String, maxW: Float, maxLines: Int): List<String> {

@@ -64,6 +64,7 @@ class VoiceAccessibilityService : AccessibilityService() {
     private var revertRunnable: Runnable? = null
 
     fun showStatus(text: String) {
+        statusHeld = false
         if (this::overlay.isInitialized) overlay.showStatus(text)
         // Краткие сообщения о командах не должны «висеть» — через 4 c возвращаем базовый статус.
         revertRunnable?.let { statusHandler.removeCallbacks(it) }
@@ -79,6 +80,30 @@ class VoiceAccessibilityService : AccessibilityService() {
     }
     fun setStatusIcon(icon: OverlayView.Icon) {
         if (this::overlay.isInitialized) overlay.setStatusIcon(icon)
+    }
+
+    @Volatile private var statusHeld = false
+
+    /** Показать статус «надолго» (многострочно), без авто-возврата через 4 c.
+     *  Снимается releaseStatusHold() (по окончании озвучки) или авто через autoReleaseMs (если >0). */
+    fun showStatusHold(text: String, maxLines: Int = 5, autoReleaseMs: Long = 0) {
+        revertRunnable?.let { statusHandler.removeCallbacks(it) }
+        statusHeld = true
+        if (this::overlay.isInitialized) overlay.showStatusMultiline(text, maxLines)
+        if (autoReleaseMs > 0) {
+            val r = Runnable { releaseStatusHold() }
+            revertRunnable = r
+            statusHandler.postDelayed(r, autoReleaseMs)
+        }
+    }
+
+    /** Снять удержание и вернуть базовый статус. */
+    fun releaseStatusHold() {
+        if (!statusHeld) return
+        statusHeld = false
+        revertRunnable?.let { statusHandler.removeCallbacks(it) }
+        val b = VoiceRecognitionService.instance?.baseStatusText() ?: return
+        if (this::overlay.isInitialized) overlay.showStatus(b)
     }
 
     fun keepScreenOn(on: Boolean) {

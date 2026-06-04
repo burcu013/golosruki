@@ -315,7 +315,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             }
             tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
                 override fun onStart(id: String?) { isSpeaking = true; listeningSetPause(true) }
-                override fun onDone(id: String?) { scheduleResume(500) }
+                override fun onDone(id: String?) { scheduleResume(500); post { VoiceAccessibilityService.instance?.releaseStatusHold() } }
                 @Deprecated("deprecated") override fun onError(id: String?) { scheduleResume(500) }
             })
         }
@@ -622,8 +622,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 val composedOk = !ask && ok
                 // «Сформулируй» — вставляем готовый текст в активное поле ввода
                 if (composedOk) insertComposed(answer)
-                VoiceAccessibilityService.instance?.showStatus("🧠 $answer")
-                if (AiProfile.load(this).voiceAnswers) {
+                val voice = AiProfile.load(this).voiceAnswers
+                // Статус с ответом держим до конца озвучки; без озвучки — по времени чтения.
+                val autoRelease = if (voice) 0L else estimateReadMs(answer)
+                VoiceAccessibilityService.instance?.showStatusHold("🧠 $answer", 5, autoRelease)
+                if (voice) {
                     // Текст для вставки не зачитываем — он уже в поле; только подтверждаем.
                     speak(if (composedOk) "Сгенерировал текст" else answer)
                 }
@@ -662,6 +665,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             }
         }
     }
+
+    /** Примерное время «прочитать» ответ глазами (для удержания статуса без озвучки). */
+    private fun estimateReadMs(t: String): Long = (3000L + t.length * 45L).coerceIn(3000L, 25000L)
 
     private fun resetIdle() {
         handler.removeCallbacks(idleRunnable)

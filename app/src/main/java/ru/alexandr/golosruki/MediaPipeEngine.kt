@@ -38,7 +38,15 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
             loadError = null
             true
         } catch (e: Throwable) {
-            loadError = e.message ?: e.javaClass.simpleName
+            val f = modelFile(appContext)
+            val mb = if (f.exists()) f.length() / (1024 * 1024) else 0L
+            val isZip = runCatching {
+                f.inputStream().use { ins ->
+                    val b = ByteArray(2); ins.read(b)
+                    b[0] == 0x50.toByte() && b[1] == 0x4B.toByte() // сигнатура zip "PK"
+                }
+            }.getOrDefault(false)
+            loadError = "${e.message ?: e.javaClass.simpleName} | файл: ${f.name}, ${mb} МБ, бандл(zip): ${if (isZip) "да" else "НЕТ — несовместимый формат"}"
             false
         }
     }

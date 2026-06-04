@@ -19,16 +19,20 @@ class ModelsActivity : ComponentActivity() {
         val url: String, val file: String
     )
 
-    // Курируемый список: от лёгкой к мощной. Все — формат .task (MediaPipe/LiteRT), под лицензией Gemma.
+    // Курируемый список: от лёгкой к мощной. Все — формат .task (бандл для MediaPipe), под лицензией Gemma.
     private val catalog = listOf(
         ModelDef("g3-1b", "Gemma 3 1B (int4)", "~550 МБ",
             "Самая лёгкая, для теста. Слабая в математике и рассуждениях.",
             "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task?download=true",
             "gemma3-1b-int4.task"),
-        ModelDef("g3-4b", "Gemma 3 4B (int4) — рекомендуется", "~3 ГБ",
-            "Заметно умнее. Нужен мощный телефон (S26 Ultra тянет). Первый запуск дольше.",
-            "https://huggingface.co/litert-community/Gemma3-4B-IT/resolve/main/gemma3-4b-it-int4.task?download=true",
-            "gemma3-4b-int4.task")
+        ModelDef("g3n-e2b", "Gemma 3n E2B (int4) — рекомендуется", "~3 ГБ",
+            "Заметный шаг вверх от 1B. Заточена под Android. Принять лицензию на странице gemma-3n-E2B-it-litert-preview.",
+            "https://huggingface.co/google/gemma-3n-E2B-it-litert-preview/resolve/main/gemma-3n-E2B-it-int4.task?download=true",
+            "gemma-3n-e2b-int4.task"),
+        ModelDef("g3n-e4b", "Gemma 3n E4B (int4) — максимум", "~4.4 ГБ",
+            "Качество выше, тяжелее (RAM ~6 ГБ). Принять лицензию на странице gemma-3n-E4B-it-litert-preview.",
+            "https://huggingface.co/google/gemma-3n-E4B-it-litert-preview/resolve/main/gemma-3n-E4B-it-int4.task?download=true",
+            "gemma-3n-e4b-int4.task")
     )
 
     private lateinit var status: TextView

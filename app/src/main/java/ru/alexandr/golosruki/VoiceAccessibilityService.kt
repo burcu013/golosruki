@@ -146,10 +146,10 @@ class VoiceAccessibilityService : AccessibilityService() {
             is Command.LongPress -> onTap(command.number, TapKind.LONG)
             is Command.DoubleTap -> onTap(command.number, TapKind.DOUBLE)
             is Command.TypeText -> typeText(command.text)
-            Command.DeleteText -> deleteText()
+            Command.DeleteText -> VoiceRecognitionService.instance?.clearViaKeyboard(false)
             Command.SelectAll -> selectAll()
             Command.CopyText -> copySelection()
-            Command.ClearText -> clearText()
+            Command.ClearText -> VoiceRecognitionService.instance?.clearViaKeyboard(true)
             Command.EnterKey -> pressEnter()
             is Command.SwipeItem -> swipeItem(command.number, command.direction)
             Command.Dictation -> VoiceRecognitionService.instance?.enterDictation()
@@ -585,16 +585,11 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     @Volatile private var dictCommittedLen = 0
 
-    /** Старт диктовки: НЕ стираем поле — возвращаем имеющийся текст (без подсказки), курсор в конец. */
-    fun beginDictationField(): String {
-        val node = focusedEditable() ?: run { dictCommittedLen = 0; return "" }
-        var cur = node.text?.toString() ?: ""
-        // Не путать реальный текст с подсказкой-плейсхолдером («Сообщение»).
-        if (Build.VERSION.SDK_INT >= 26) {
-            val hint = node.hintText?.toString()
-            if (hint != null && cur == hint) cur = ""
-        }
-        dictCommittedLen = cur.length
+    /** Старт диктовки: НЕ стираем поле, ставим курсор в конец. Дописываем только новое. */
+    fun beginDictationField() {
+        dictCommittedLen = 0
+        val node = focusedEditable() ?: return
+        val cur = node.text?.toString() ?: ""
         runCatching {
             val sel = Bundle().apply {
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cur.length)
@@ -602,40 +597,54 @@ class VoiceAccessibilityService : AccessibilityService() {
             }
             node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
         }
-        return cur
     }
 
-    /** Зафиксировать текст диктовки. Сначала пробуем прямую замену (надёжно в обычных полях),
-     *  если поле не принимает — вставляем ТОЛЬКО новый кусок через буфер обмена (без дублей). */
+    /** Зафиксировать диктовку: вставляем ТОЛЬКО новый кусок в позицию курсора (без дублей, не стирая). */
     fun commitDictation(full: String) {
         val node = focusedEditable() ?: run { showStatus("Нет поля ввода"); return }
-        // 1. Прямая замена всего текста — основной путь
-        val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, full) }
-        if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-            val sel = Bundle().apply {
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, full.length)
-                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, full.length)
-            }
-            runCatching { node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel) }
-            dictCommittedLen = full.length
-            return
-        }
-        // 2. Запасной путь: вставить только НОВЫЙ кусок через буфер обмена
         val from = dictCommittedLen.coerceIn(0, full.length)
         val delta = full.substring(from)
-        if (delta.isNotEmpty()) {
+        dictCommittedLen = full.length
+        if (delta.isNotEmpty()) insertAtCursor(node, delta)
+    }
+
+    /** Разовая вставка текста в позицию курсора (для «сформулируй»). */
+    fun insertText(text: String) {
+        val node = focusedEditable() ?: run { showStatus("Нет поля ввода"); return }
+        if (text.isNotEmpty()) insertAtCursor(node, text)
+    }
+
+    /** Вставка строки в текущую позицию курсора с сохранением остального текста. */
+    private fun insertAtCursor(node: AccessibilityNodeInfo, ins: String) {
+        val cur = node.text?.toString() ?: ""
+        val se = node.textSelectionEnd
+        val ss = node.textSelectionStart
+        val end = if (se in 0..cur.length) se else cur.length
+        val start = if (ss in 0..cur.length) ss else end
+        val a = minOf(start, end).coerceIn(0, cur.length)
+        val b = maxOf(start, end).coerceIn(0, cur.length)
+        val newText = cur.substring(0, a) + ins + cur.substring(b)
+        val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, newText) }
+        if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+            val pos = a + ins.length
+            runCatching {
+                val sel = Bundle().apply {
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, pos)
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, pos)
+                }
+                node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
+            }
+        } else {
+            // Запасной путь — вставка через буфер обмена (для полей, не принимающих SET_TEXT).
             runCatching {
                 val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("d", delta))
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("d", ins))
                 node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
                 if (!node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
-                    // некоторые поля принимают вставку только на дочернем фокусном узле
-                    rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                        ?.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                    rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.performAction(AccessibilityNodeInfo.ACTION_PASTE)
                 }
             }
         }
-        dictCommittedLen = full.length
     }
 
     /** Полная замена текста поля (прочие нужды). */
@@ -702,12 +711,26 @@ class VoiceAccessibilityService : AccessibilityService() {
         node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, args)
     }
 
+    /** Обёртка для маршрута из VoiceRecognitionService (когда клавиатура недоступна). */
+    fun clearOrDeleteAcc(all: Boolean) { if (all) clearText() else deleteText() }
+
     private fun clearText() {
         val node = focusedEditable() ?: run { showStatus("Нет поля ввода"); return }
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
         }
-        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+            // запасной путь: выделить всё и вырезать
+            runCatching {
+                val len = node.text?.length ?: 0
+                val sel = Bundle().apply {
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, len)
+                }
+                node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
+                node.performAction(AccessibilityNodeInfo.ACTION_CUT)
+            }
+        }
     }
 
     private fun pressEnter() {
@@ -808,24 +831,45 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     // --- Управление звонком и звуком ---
     private fun answerCall() {
+        var ok = false
         try {
             val tm = getSystemService(TELECOM_SERVICE) as android.telecom.TelecomManager
-            if (Build.VERSION.SDK_INT >= 26) { tm.acceptRingingCall(); Logger.log("ACC", "Ответ на звонок") }
-        } catch (e: Exception) {
-            Logger.log("ACC", "Ответ не удался: ${e.message}")
-            showStatus("Нужно разрешение «Звонки» (ANSWER_PHONE_CALLS)")
-        }
+            if (Build.VERSION.SDK_INT >= 26) { tm.acceptRingingCall(); ok = true; Logger.log("ACC", "Ответ через систему") }
+        } catch (e: Exception) { Logger.log("ACC", "Ответ (система): ${e.message}") }
+        // VoIP-приложения (Telegram, WhatsApp): нажать кнопку ответа на экране.
+        if (clickCallButton(listOf("ответить", "принять", "answer", "accept", "ответ на звонок"))) {
+            Logger.log("ACC", "Ответ: кнопка на экране")
+        } else if (!ok) showStatus("Не нашёл, как ответить (нужно разрешение «Звонки»)")
     }
 
     private fun endCall() {
+        var done = false
         try {
             val tm = getSystemService(TELECOM_SERVICE) as android.telecom.TelecomManager
-            if (Build.VERSION.SDK_INT >= 28) { tm.endCall(); Logger.log("ACC", "Сброс звонка") }
-            else showStatus("Сброс доступен на Android 9+")
-        } catch (e: Exception) {
-            Logger.log("ACC", "Сброс не удался: ${e.message}")
-            showStatus("Нужно разрешение «Звонки»")
+            if (Build.VERSION.SDK_INT >= 28) { done = tm.endCall(); Logger.log("ACC", "Сброс через систему: $done") }
+        } catch (e: Exception) { Logger.log("ACC", "Сброс (система): ${e.message}") }
+        // VoIP-приложения: нажать кнопку завершения на экране (TelecomManager их не завершает).
+        if (clickCallButton(listOf("завершить", "сбросить", "положить трубку", "отбой", "повесить",
+                "отклонить", "end call", "end", "decline", "hang up"))) {
+            Logger.log("ACC", "Сброс: кнопка на экране")
+        } else if (!done) showStatus("Не нашёл, как сбросить звонок")
+    }
+
+    /** Найти и нажать кнопку звонка по надписи/описанию (для VoIP-экранов). */
+    private fun clickCallButton(keys: List<String>): Boolean {
+        val root = rootInActiveWindow ?: return false
+        for (k in keys) {
+            val n = searchByText(root, k) ?: continue
+            val c = clickableAncestor(n) ?: if (n.isClickable) n else continue
+            if (c.isVisibleToUser) {
+                if (!c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                    val r = android.graphics.Rect(); c.getBoundsInScreen(r)
+                    doTap(r.exactCenterX(), r.exactCenterY(), TapKind.SINGLE)
+                }
+                return true
+            }
         }
+        return false
     }
 
     private fun silenceRinger() {

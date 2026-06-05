@@ -74,15 +74,49 @@ class GolosRukiKeyboardService : InputMethodService() {
     /** Есть ли активное поле ввода (наша клавиатура — текущая и поле в фокусе). */
     fun isActiveInput(): Boolean = currentInputConnection != null
 
-    /** Старт диктовки: НЕ стираем поле — возвращаем имеющийся текст, курсор в конец. */
-    fun beginDictation(): String {
-        val ic = currentInputConnection ?: run { dictCommittedLen = 0; return "" }
-        val before = ic.getTextBeforeCursor(100000, 0)?.toString() ?: ""
-        val after = ic.getTextAfterCursor(100000, 0)?.toString() ?: ""
-        val full = before + after
-        runCatching { ic.setSelection(full.length, full.length) }  // курсор в конец
-        dictCommittedLen = full.length
-        return full
+    /** Старт диктовки: НЕ стираем поле. Курсор в конец, дописываем только новое. */
+    fun beginDictation() {
+        val ic = currentInputConnection
+        if (ic != null) {
+            val before = ic.getTextBeforeCursor(100000, 0)?.length ?: 0
+            val after = ic.getTextAfterCursor(100000, 0)?.length ?: 0
+            runCatching { ic.setSelection(before + after, before + after) }
+        }
+        dictCommittedLen = 0
+    }
+
+    /** Разовая вставка текста в позицию курсора (для «сформулируй»). */
+    fun insertText(text: String) {
+        val ic = currentInputConnection ?: return
+        ic.commitText(text, 1)
+    }
+
+    /** Очистить всё поле. */
+    fun clearAll() {
+        val ic = currentInputConnection ?: return
+        ic.beginBatchEdit()
+        val before = ic.getTextBeforeCursor(100000, 0)?.length ?: 0
+        val after = ic.getTextAfterCursor(100000, 0)?.length ?: 0
+        ic.deleteSurroundingText(before, after)
+        ic.endBatchEdit()
+    }
+
+    /** Удалить символ перед курсором или выделенное.
+     *  sendKeyEvent(DEL) — настоящая клавиша Backspace, работает даже в холсте (Samsung Notes). */
+    fun deleteBack() {
+        val ic = currentInputConnection ?: return
+        val sel = ic.getSelectedText(0)
+        if (!sel.isNullOrEmpty()) { ic.commitText("", 1); return }
+        ic.sendKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DEL))
+        ic.sendKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_DEL))
+    }
+
+    /** Выделить весь текст и стереть (через клавишу Backspace) — работает и в холсте. */
+    fun selectAllAndDelete() {
+        val ic = currentInputConnection ?: return
+        ic.performContextMenuAction(android.R.id.selectAll)
+        ic.sendKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DEL))
+        ic.sendKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_DEL))
     }
 
     /** Зафиксировать текст диктовки — вставляется только НОВЫЙ кусок (без дублей). */

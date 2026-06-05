@@ -575,12 +575,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         // При первом входе — забираем уже имеющийся текст поля, чтобы не стереть его.
         // При переключении режима (текст↔цифры) — буфер НЕ трогаем.
         if (!alreadyDictating) {
-            // Сохраняем уже имеющийся текст поля и дописываем к нему (не стираем!).
+            // Чистая модель: НЕ стираем поле и НЕ переносим текст в буфер.
+            // Буфер пустой, дописываем только НОВОЕ в позицию курсора.
             dictBuffer.setLength(0)
             val kb = GolosRukiKeyboardService.instance
-            val pre = if (kb != null && kb.isActiveInput()) kb.beginDictation()
-                      else (VoiceAccessibilityService.instance?.beginDictationField() ?: "")
-            dictBuffer.append(pre)
+            if (kb != null && kb.isActiveInput()) kb.beginDictation()
+            else VoiceAccessibilityService.instance?.beginDictationField()
         }
         VoiceAccessibilityService.instance?.setStatusIcon(if (digits) OverlayView.Icon.DIGITS else OverlayView.Icon.PEN)
         VoiceAccessibilityService.instance?.showStatus(stateText())
@@ -646,11 +646,36 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     /** Вставить сформулированный ИИ текст в активное поле — как диктовка:
      *  через невидимую клавиатуру (работает в браузере/заметках), иначе через спец-возможности. */
+    /** Очистка (all=true) или удаление одного символа/выделенного (all=false).
+     *  Делаем через клавиатуру (симуляция Backspace — работает даже в заметках/холсте);
+     *  если авто-клавиатура недоступна — через спец-возможности. */
+    fun clearViaKeyboard(all: Boolean) {
+        val kb = GolosRukiKeyboardService.instance
+        when {
+            kb != null && kb.isActiveInput() -> {
+                if (all) kb.selectAllAndDelete() else kb.deleteBack()
+            }
+            imeReadyForAutoSwitch() -> {
+                switchToVoiceIme()
+                handler.postDelayed({
+                    val k = GolosRukiKeyboardService.instance
+                    if (k != null && k.isActiveInput()) {
+                        if (all) k.selectAllAndDelete() else k.deleteBack()
+                    } else {
+                        VoiceAccessibilityService.instance?.clearOrDeleteAcc(all)
+                    }
+                    switchBackIme()
+                }, 700)
+            }
+            else -> VoiceAccessibilityService.instance?.clearOrDeleteAcc(all)
+        }
+    }
+
     private fun insertComposed(text: String) {
         val kb = GolosRukiKeyboardService.instance
         when {
             kb != null && kb.isActiveInput() -> {
-                kb.commitDictation(text)
+                kb.insertText(text)
                 Logger.log("AI", "Текст вставлен (клавиатура уже активна)")
             }
             imeReadyForAutoSwitch() -> {
@@ -659,16 +684,16 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 handler.postDelayed({
                     val k = GolosRukiKeyboardService.instance
                     if (k != null && k.isActiveInput()) {
-                        k.commitDictation(text); Logger.log("AI", "Текст вставлен (клавиатура)")
+                        k.insertText(text); Logger.log("AI", "Текст вставлен (клавиатура)")
                     } else {
-                        VoiceAccessibilityService.instance?.commitDictation(text)
+                        VoiceAccessibilityService.instance?.insertText(text)
                         Logger.log("AI", "Текст вставлен (спец-возможности, клавиатура не подключилась)")
                     }
                     switchBackIme()
                 }, 700)
             }
             else -> {
-                VoiceAccessibilityService.instance?.commitDictation(text)
+                VoiceAccessibilityService.instance?.insertText(text)
                 Logger.log("AI", "Текст вставлен (спец-возможности)")
             }
         }
@@ -712,17 +737,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         // дёргать команды. Требуем слово активации; медиа-режим выключаем.
         if (inCall()) {
             clearMediaMode()
-            val rest = if (text.contains(wakeWord)) stripWake(text).trim() else text.trim()
-            // Управление звонком — принимаем БЕЗ слова активации (срочно, экран часто погашен у уха).
-            val cc = CommandParser.parse(rest, personal)
-            if (cc is Command.AnswerCall || cc is Command.RejectCall) {
-                resetIdle()
-                Logger.log("CALL", "Звонок: ${cc.label()}")
-                post { VoiceAccessibilityService.instance?.execute(cc) }
-                return
-            }
-            // Прочие команды во время звонка — только со словом активации.
+            // Во время звонка ВСЕ команды (вкл. ответ/сброс) — только через слово активации «Иван…»,
+            // чтобы обычная речь в разговоре не принимала и не сбрасывала звонок.
             if (!text.contains(wakeWord)) { Logger.log("REC", "Игнор (идёт звонок): '$text'"); return }
+            val rest = stripWake(text).trim()
             resetIdle()
             if (rest.isBlank()) VoiceAccessibilityService.instance?.showStatus("🎙 Слушаю (звонок)")
             else handleCommand(rest)
@@ -757,6 +775,13 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             }
             if (hasWake) {
                 val rest = stripWake(text).trim()
+                // Управление звонком при погашенном экране — важно (телефон у уха).
+                val cc = CommandParser.parse(rest, personal)
+                if (cc is Command.RejectCall || cc is Command.AnswerCall) {
+                    Logger.log("CALL", "Экран выкл, звонок: ${cc.label()}")
+                    post { VoiceAccessibilityService.instance?.execute(cc) }
+                    return
+                }
                 if (mediaCode.isNotBlank() && rest == mediaCode) {
                     armScreenOffMedia()
                     Logger.log("MEDIA", "Экран выкл → окно медиа открыто (${mediaWindowMs / 1000}с)")

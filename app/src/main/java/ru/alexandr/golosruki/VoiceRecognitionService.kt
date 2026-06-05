@@ -714,7 +714,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             clearMediaMode()
             val rest = if (text.contains(wakeWord)) stripWake(text).trim() else text.trim()
             // Управление звонком — принимаем БЕЗ слова активации (срочно, экран часто погашен у уха).
-            val cc = CommandParser.parse(rest)
+            val cc = CommandParser.parse(rest, personal)
             if (cc is Command.AnswerCall || cc is Command.RejectCall) {
                 resetIdle()
                 Logger.log("CALL", "Звонок: ${cc.label()}")

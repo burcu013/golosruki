@@ -38,6 +38,7 @@ object CommandParser {
         // 0.15 Управление звонком и звуком
         if (t.contains("ответь") || t.contains("ответить") || t.contains("прими")) return Command.AnswerCall
         if (t.contains("сбрось") || t.contains("отклони") || t.contains("заверши") ||
+            t.contains("трубк") || t.contains("повесь") ||
             t.contains("положи трубку") || t.contains("отбой")) return Command.RejectCall
         if (t.contains("беззвучно") || t.contains("заглуши") || t.contains("тихо")) return Command.SilenceRinger
         if (t.contains("без звука") || t.contains("выключи звук") || t.contains("отключи звук")) return Command.VolumeMute

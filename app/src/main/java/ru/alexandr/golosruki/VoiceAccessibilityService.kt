@@ -585,22 +585,24 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     @Volatile private var dictCommittedLen = 0
 
-    /** Старт диктовки: чистим поле, сбрасываем счётчик. Способ ввода выбираем на каждом шаге. */
-    fun beginDictationField() {
-        dictCommittedLen = 0
-        val node = focusedEditable() ?: return
-        val empty = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "") }
-        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, empty)) {
-            runCatching {
-                val len = node.text?.length ?: 0
-                val sel = Bundle().apply {
-                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
-                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, len)
-                }
-                node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
-                node.performAction(AccessibilityNodeInfo.ACTION_CUT)
-            }
+    /** Старт диктовки: НЕ стираем поле — возвращаем имеющийся текст (без подсказки), курсор в конец. */
+    fun beginDictationField(): String {
+        val node = focusedEditable() ?: run { dictCommittedLen = 0; return "" }
+        var cur = node.text?.toString() ?: ""
+        // Не путать реальный текст с подсказкой-плейсхолдером («Сообщение»).
+        if (Build.VERSION.SDK_INT >= 26) {
+            val hint = node.hintText?.toString()
+            if (hint != null && cur == hint) cur = ""
         }
+        dictCommittedLen = cur.length
+        runCatching {
+            val sel = Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cur.length)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cur.length)
+            }
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, sel)
+        }
+        return cur
     }
 
     /** Зафиксировать текст диктовки. Сначала пробуем прямую замену (надёжно в обычных полях),

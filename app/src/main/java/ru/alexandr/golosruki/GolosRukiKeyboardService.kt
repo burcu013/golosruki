@@ -74,15 +74,15 @@ class GolosRukiKeyboardService : InputMethodService() {
     /** Есть ли активное поле ввода (наша клавиатура — текущая и поле в фокусе). */
     fun isActiveInput(): Boolean = currentInputConnection != null
 
-    /** Старт диктовки: очистить поле и сбросить счётчик. */
-    fun beginDictation() {
-        dictCommittedLen = 0
-        val ic = currentInputConnection ?: return
-        ic.beginBatchEdit()
-        val before = ic.getTextBeforeCursor(100000, 0)?.length ?: 0
-        val after = ic.getTextAfterCursor(100000, 0)?.length ?: 0
-        ic.deleteSurroundingText(before, after)
-        ic.endBatchEdit()
+    /** Старт диктовки: НЕ стираем поле — возвращаем имеющийся текст, курсор в конец. */
+    fun beginDictation(): String {
+        val ic = currentInputConnection ?: run { dictCommittedLen = 0; return "" }
+        val before = ic.getTextBeforeCursor(100000, 0)?.toString() ?: ""
+        val after = ic.getTextAfterCursor(100000, 0)?.toString() ?: ""
+        val full = before + after
+        runCatching { ic.setSelection(full.length, full.length) }  // курсор в конец
+        dictCommittedLen = full.length
+        return full
     }
 
     /** Зафиксировать текст диктовки — вставляется только НОВЫЙ кусок (без дублей). */

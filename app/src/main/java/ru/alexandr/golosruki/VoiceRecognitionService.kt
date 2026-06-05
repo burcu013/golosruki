@@ -127,14 +127,21 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     /** Играет ли сейчас звук. isMusicActive = true только при реальном воспроизведении. */
     private fun isMediaPlaying(): Boolean = try { audioManager.isMusicActive } catch (e: Exception) { false }
     /** Активный разговор: сотовый (MODE_IN_CALL) или мессенджер (MODE_IN_COMMUNICATION), но не наш BT-SCO. */
-    private fun inCall(): Boolean = try {
-        val m = audioManager.mode
-        // ВАЖНО: при включённом шумоподавлении мы сами открываем VOICE_COMMUNICATION-захват,
-        // из-за чего система может выставить MODE_IN_COMMUNICATION. Это НЕ звонок — не учитываем,
-        // пока работает наш NS-движок (иначе ломается гейт команд: всё требует слово активации).
-        m == android.media.AudioManager.MODE_IN_CALL ||
-            (m == android.media.AudioManager.MODE_IN_COMMUNICATION && !btScoOn && nsService == null)
-    } catch (e: Exception) { false }
+    private fun inCall(): Boolean {
+        // 1) Телефония (сотовый звонок) — надёжно, не зависит от нашего NS-захвата мика.
+        try {
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as android.telephony.TelephonyManager
+            @Suppress("DEPRECATION")
+            val st = tm.callState
+            if (st != android.telephony.TelephonyManager.CALL_STATE_IDLE) return true
+        } catch (_: Exception) {}
+        // 2) Аудио-режим (VoIP), но не путать с нашим собственным NS-захватом.
+        return try {
+            val m = audioManager.mode
+            m == android.media.AudioManager.MODE_IN_CALL ||
+                (m == android.media.AudioManager.MODE_IN_COMMUNICATION && !btScoOn && nsService == null)
+        } catch (e: Exception) { false }
+    }
     fun wakeWordPublic(): String = wakeWord
 
     /** Экран включён (интерактивен)? */
@@ -568,11 +575,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         // При первом входе — забираем уже имеющийся текст поля, чтобы не стереть его.
         // При переключении режима (текст↔цифры) — буфер НЕ трогаем.
         if (!alreadyDictating) {
-            // Чистый старт: очищаем поле, чтобы не подмешивалась подсказка («Сообщение») или старый текст.
+            // Сохраняем уже имеющийся текст поля и дописываем к нему (не стираем!).
             dictBuffer.setLength(0)
             val kb = GolosRukiKeyboardService.instance
-            if (kb != null && kb.isActiveInput()) kb.beginDictation()
-            else VoiceAccessibilityService.instance?.beginDictationField()
+            val pre = if (kb != null && kb.isActiveInput()) kb.beginDictation()
+                      else (VoiceAccessibilityService.instance?.beginDictationField() ?: "")
+            dictBuffer.append(pre)
         }
         VoiceAccessibilityService.instance?.setStatusIcon(if (digits) OverlayView.Icon.DIGITS else OverlayView.Icon.PEN)
         VoiceAccessibilityService.instance?.showStatus(stateText())
@@ -704,8 +712,17 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         // дёргать команды. Требуем слово активации; медиа-режим выключаем.
         if (inCall()) {
             clearMediaMode()
+            val rest = if (text.contains(wakeWord)) stripWake(text).trim() else text.trim()
+            // Управление звонком — принимаем БЕЗ слова активации (срочно, экран часто погашен у уха).
+            val cc = CommandParser.parse(rest)
+            if (cc is Command.AnswerCall || cc is Command.RejectCall) {
+                resetIdle()
+                Logger.log("CALL", "Звонок: ${cc.label()}")
+                post { VoiceAccessibilityService.instance?.execute(cc) }
+                return
+            }
+            // Прочие команды во время звонка — только со словом активации.
             if (!text.contains(wakeWord)) { Logger.log("REC", "Игнор (идёт звонок): '$text'"); return }
-            val rest = stripWake(text).trim()
             resetIdle()
             if (rest.isBlank()) VoiceAccessibilityService.instance?.showStatus("🎙 Слушаю (звонок)")
             else handleCommand(rest)

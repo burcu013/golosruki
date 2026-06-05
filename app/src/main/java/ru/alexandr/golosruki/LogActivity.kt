@@ -61,7 +61,7 @@ class LogActivity : ComponentActivity() {
         }
     }
 
-    private fun refresh() { logView.text = Logger.dump() }
+    private fun refresh() { logView.text = Logger.fullText() }
 
     private fun copy() {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager

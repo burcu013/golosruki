@@ -127,6 +127,27 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     /** Играет ли сейчас звук. isMusicActive = true только при реальном воспроизведении. */
     private fun isMediaPlaying(): Boolean = try { audioManager.isMusicActive } catch (e: Exception) { false }
     /** Активный разговор: сотовый (MODE_IN_CALL) или мессенджер (MODE_IN_COMMUNICATION), но не наш BT-SCO. */
+    private fun audioModeName(): String = try {
+        when (audioManager.mode) {
+            android.media.AudioManager.MODE_NORMAL -> "NORMAL"
+            android.media.AudioManager.MODE_RINGTONE -> "RINGTONE"
+            android.media.AudioManager.MODE_IN_CALL -> "IN_CALL"
+            android.media.AudioManager.MODE_IN_COMMUNICATION -> "IN_COMM"
+            else -> "m${audioManager.mode}"
+        }
+    } catch (e: Exception) { "?" }
+
+    private fun telStateName(): String = try {
+        val tm = getSystemService(Context.TELEPHONY_SERVICE) as android.telephony.TelephonyManager
+        @Suppress("DEPRECATION")
+        when (tm.callState) {
+            android.telephony.TelephonyManager.CALL_STATE_IDLE -> "IDLE"
+            android.telephony.TelephonyManager.CALL_STATE_RINGING -> "RINGING"
+            android.telephony.TelephonyManager.CALL_STATE_OFFHOOK -> "OFFHOOK"
+            else -> "?"
+        }
+    } catch (e: SecurityException) { "нет_разрешения" } catch (e: Exception) { "?" }
+
     private fun inCall(): Boolean {
         // 1) Телефония (сотовый звонок) — надёжно, не зависит от нашего NS-захвата мика.
         try {
@@ -711,7 +732,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         val raw = hypothesis?.let { JSONObject(it).optString("text") } ?: return
         val text = normalize(raw.replace("[unk]", " "))
         if (text.isBlank()) return
-        Logger.log("HEARD", "'$text' | state=$state media=$mediaControlMode dict=$dictation digits=$dictationDigits call=${inCall()}")
+        Logger.log("HEARD", "'$text' | state=$state media=$mediaControlMode dict=$dictation digits=$dictationDigits call=${inCall()} mode=${audioModeName()} tel=${telStateName()}")
 
         // Анти-петля: пока проигрывается синтезатор, не распознаём (иначе слышим сами себя)
         if (isSpeaking) { Logger.log("REC", "Игнор (говорит синтезатор): '$text'"); return }

@@ -11,8 +11,8 @@ android {
         applicationId = "ru.alexandr.golosruki"
         minSdk = 26
         targetSdk = 34
-        versionCode = 70
-        versionName = "6.39"
+        versionCode = 73
+        versionName = "6.42"
     }
 
     signingConfigs {

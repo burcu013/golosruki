@@ -16,7 +16,7 @@ object LocalAi {
 
     // Короткая память: последние обмены «вопрос → ответ» (для «помнит предыдущий вопрос»).
     private val history = ArrayDeque<Pair<String, String>>()
-    private const val HISTORY_MAX = 3
+    private const val HISTORY_MAX = 2
 
     fun clearHistory() { history.clear() }
 
@@ -32,6 +32,14 @@ object LocalAi {
         val profile = AiProfile.load(ctx)
         if (!profile.enabled) return "ИИ-помощник выключен. Включите его в настройках."
         if (userText.isBlank()) return "Не расслышал. Повторите, пожалуйста."
+        // 1) Точная арифметика — в коде, без модели.
+        if (ask) LocalMath.eval(userText)?.let { Logger.log("AI", "Математика в коде: $it"); return it }
+        // 2) Данные устройства (время/дата/день/заряд) — мгновенно из системы.
+        if (ask) LocalFacts.answer(ctx, userText)?.let { Logger.log("AI", "Факт устройства: $it"); return it }
+        // 3) Погода — Open-Meteo по геолокации (нужен интернет).
+        if (ask && userText.lowercase().contains("погод")) {
+            val w = Weather.describe(ctx); Logger.log("AI", "Погода: $w"); return w
+        }
         if (!engine.isReady()) {
             return "Модель ИИ не установлена. Откройте Настройки → ИИ → загрузить модель. Запрос понял: «$userText»."
         }
@@ -41,6 +49,8 @@ object LocalAi {
         if (ask) {
             sys = buildString {
                 append("Ты — голосовой помощник. Отвечай на русском языке кратко и точно, сразу по сути вопроса. ")
+                val now = java.text.SimpleDateFormat("d MMMM yyyy 'года', EEEE, HH:mm", java.util.Locale("ru", "RU")).format(java.util.Date())
+                append("Текущие дата и время: $now. ")
                 append("Не здоровайся, не представляйся, не задавай встречных вопросов. ")
                 append("Арифметику считай аккуратно и перепроверяй результат перед ответом. ")
                 append("Не выдумывай факты, законы, цены, даты и ссылки — если точно не знаешь, коротко скажи «не знаю» или «не уверен». ")

@@ -27,6 +27,7 @@ object Logger {
             val dir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
             file = File(dir, "golosruki_log.txt")
         }
+        installCrashHandler()
     }
 
     @Synchronized
@@ -50,6 +51,30 @@ object Logger {
 
     @Synchronized
     fun dump(): String = if (buf.isEmpty()) "Лог пуст" else buf.joinToString("\n")
+
+    /** Синхронная запись строки в файл (на текущем потоке) — для маркеров перед опасными
+     *  операциями и для краша, когда асинхронная очередь не успеет записаться. */
+    @Synchronized
+    fun logSync(tag: String, msg: String) {
+        val line = "${fmt.format(Date())} [$tag] $msg"
+        buf.addLast(line)
+        while (buf.size > MAX) buf.removeFirst()
+        android.util.Log.d("GolosRuki", line)
+        runCatching { file?.appendText(line + "\n") }
+    }
+
+    /** Перехват необработанных сбоев: пишем причину в файл ДО завершения процесса. */
+    fun installCrashHandler() {
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, ex ->
+            runCatching {
+                val sw = java.io.StringWriter()
+                ex.printStackTrace(java.io.PrintWriter(sw))
+                logSync("CRASH", "поток=${thread.name}\n$sw")
+            }
+            prev?.uncaughtException(thread, ex)
+        }
+    }
 
     /** Полная история для экспорта: предыдущий файл (если был) + текущий. */
     fun fullText(): String {

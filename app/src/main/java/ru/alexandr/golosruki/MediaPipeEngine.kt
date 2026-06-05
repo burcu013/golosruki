@@ -32,7 +32,7 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
         return try {
             val opts = LlmInferenceOptions.builder()
                 .setModelPath(modelFile(appContext).absolutePath)
-                .setMaxTokens(1024)
+                .setMaxTokens(512)
                 .build()
             llm = LlmInference.createFromOptions(appContext, opts)
             loadError = null
@@ -61,8 +61,11 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
             append(userText.trim())
             append("<end_of_turn>\n<start_of_turn>model\n")
         }
+        Logger.logSync("AI", "Старт генерации (длина запроса ${prompt.length})")
         return try {
-            engine.generateResponse(prompt)?.trim().orEmpty().ifBlank { "Пустой ответ от модели." }
+            val r = engine.generateResponse(prompt)?.trim().orEmpty().ifBlank { "Пустой ответ от модели." }
+            Logger.log("AI", "Генерация завершена (${r.length} симв.)")
+            r
         } catch (e: Throwable) {
             "Ошибка генерации: ${e.message ?: e.javaClass.simpleName}"
         }

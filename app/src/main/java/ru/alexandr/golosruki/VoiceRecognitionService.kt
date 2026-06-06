@@ -29,6 +29,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var recognizer: Recognizer? = null               // текущий распознаватель — закрываем при перезапуске (иначе утечка нативной памяти → краш, особенно с большой моделью)
     private var nsService: NsSpeechService? = null            // альтернативный движок с шумоподавлением
     @Volatile private var useNoiseSuppress = false            // тумблер (по умолчанию ВЫКЛ)
+    @Volatile private var callActive = false                  // идёт мобильный звонок (NS на это время выключаем)
+    private var phoneListener: android.telephony.PhoneStateListener? = null
     private lateinit var personal: PersonalConfig
     private val handler = Handler(Looper.getMainLooper())
 
@@ -328,6 +330,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         ttsVoiceName = SettingsStore.getTtsVoice(this)
         CommandAliases.aliasMap = SettingsStore.getAliasMap(this)   // персональные триггеры/коррекции
         useNoiseSuppress = SettingsStore.getNoiseSuppress(this)
+        registerCallListener()
         if (SettingsStore.getBtMic(this)) enableBtMic()
         if (ttsEnabled) {
             tts = android.speech.tts.TextToSpeech(this) { status ->
@@ -538,7 +541,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 Recognizer(m, 16000.0f, Vocabulary.buildGrammar(personal, wakeWord, mediaCode))
             }
             recognizer = rec
-            if (useNoiseSuppress) {
+            if (useNoiseSuppress && !callActive) {
                 val s = NsSpeechService(rec, 16000, this)
                 if (s.start()) {
                     nsService = s
@@ -996,9 +999,42 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (model != null) restartListening()
     }
 
+    /** Слушатель состояния звонка: на время мобильного вызова временно выключаем
+     *  шумоподавление (его VOICE_COMMUNICATION-захват конфликтует со звонком),
+     *  после вызова — возвращаем как было. */
+    private fun registerCallListener() {
+        try {
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as android.telephony.TelephonyManager
+            val l = object : android.telephony.PhoneStateListener() {
+                override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                    val active = state != android.telephony.TelephonyManager.CALL_STATE_IDLE
+                    if (active != callActive) {
+                        callActive = active
+                        Logger.log("CALL", if (active) "Звонок — шумоподавление временно ВЫКЛ"
+                                           else "Звонок завершён — шумоподавление восстановлено")
+                        if (useNoiseSuppress) restartListening()   // переключить движок
+                    }
+                }
+            }
+            @Suppress("DEPRECATION")
+            tm.listen(l, android.telephony.PhoneStateListener.LISTEN_CALL_STATE)
+            phoneListener = l
+        } catch (e: Exception) { Logger.log("CALL", "Слушатель телефона не запущен: ${e.message}") }
+    }
+
+    private fun unregisterCallListener() {
+        runCatching {
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as android.telephony.TelephonyManager
+            @Suppress("DEPRECATION")
+            phoneListener?.let { tm.listen(it, android.telephony.PhoneStateListener.LISTEN_NONE) }
+        }
+        phoneListener = null
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         handler.removeCallbacks(idleRunnable)
+        unregisterCallListener()
         listeningStop()
         model?.close()
         disableBtMic()

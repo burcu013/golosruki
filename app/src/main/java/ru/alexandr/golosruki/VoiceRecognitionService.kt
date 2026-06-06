@@ -1002,9 +1002,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                     startAiQuery(true); return
                 }
                 composeTriggers.any { text.contains(it) } -> {
-                    val rest = afterAny(text, composeTriggers)
-                    if (rest.isNotBlank()) handleAi(false, rest) else startAiQuery(false)
-                    return
+                    // Текст для «сформулируй» — свободный (его нет в грамматике команд),
+                    // поэтому всегда переходим в свободный захват: триггер → потом текст.
+                    startAiQuery(false); return
                 }
                 askTriggers.any { text.contains(it) } -> {
                     val rest = afterAny(text, askTriggers)
@@ -1043,7 +1043,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private fun stripWake(t: String) = t.replace(wakeWord, "").trim()
     private fun stripResume(t: String) = t.replace("слушай", "").replace("продолжи", "").trim()
     private fun afterAny(text: String, triggers: List<String>): String {
-        for (tr in triggers) { val i = text.indexOf(tr); if (i >= 0) return text.substring(i + tr.length).trim() }
+        val words = text.split(Regex("\\s+")).filter { it.isNotBlank() }
+        for (i in words.indices) {
+            if (triggers.any { tr -> words[i] == tr || words[i].startsWith(tr) }) {
+                return words.drop(i + 1).joinToString(" ").trim()
+            }
+        }
         return ""
     }
     private fun post(action: () -> Unit) = handler.post(action)

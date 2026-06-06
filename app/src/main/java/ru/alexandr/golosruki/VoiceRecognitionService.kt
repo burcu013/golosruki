@@ -178,6 +178,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var dictationDigits = false
     @Volatile var aiListening = false      // идёт свободный захват вопроса/текста для ИИ
     @Volatile private var aiDialog = false // идёт режим диалога с ИИ (до «хватит»)
+    @Volatile private var lastAiQuestion = "" // последний вопрос к ИИ (для «подробнее»)
     @Volatile private var aiAsk = true     // true — вопрос, false — сформулировать текст
     @Volatile private var aiThinking = false  // идёт генерация ответа (модель «думает»)
     private val dictBuffer = StringBuilder()
@@ -644,6 +645,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     private fun handleAi(ask: Boolean, query: String) {
+        if (ask) lastAiQuestion = query     // для команды «подробнее»
         aiThinking = true
         handler.removeCallbacks(idleRunnable)   // не засыпать, пока модель думает
         VoiceAccessibilityService.instance?.showStatus("🧠 Думаю…")
@@ -966,7 +968,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             val askTriggers = listOf("поразмышляй", "порассуждай", "подумай", "размышляй", "рассуждай", "спросить", "спроси", "думай")
             val composeTriggers = listOf("сформулируй", "сформулир")
             val dialogTriggers = listOf("поговорим", "побеседуем", "пообщаемся", "поболтаем")
+            val moreTriggers = listOf("подробнее", "подробней", "развёрнуто", "развернуто", "поподробнее")
             when {
+                moreTriggers.any { text.contains(it) } && lastAiQuestion.isNotBlank() -> {
+                    handleAi(true, "$lastAiQuestion. Ответь подробно и развёрнуто.")
+                    return
+                }
                 dialogTriggers.any { text.contains(it) } -> {
                     aiDialog = true
                     speak("Давайте поговорим. Чтобы закончить — скажите «хватит».")

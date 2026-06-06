@@ -836,40 +836,87 @@ class VoiceAccessibilityService : AccessibilityService() {
             val tm = getSystemService(TELECOM_SERVICE) as android.telecom.TelecomManager
             if (Build.VERSION.SDK_INT >= 26) { tm.acceptRingingCall(); ok = true; Logger.log("ACC", "Ответ через систему") }
         } catch (e: Exception) { Logger.log("ACC", "Ответ (система): ${e.message}") }
-        // VoIP-приложения (Telegram, WhatsApp): нажать кнопку ответа на экране.
-        if (clickCallButton(listOf("ответить", "принять", "answer", "accept", "ответ на звонок"))) {
-            Logger.log("ACC", "Ответ: кнопка на экране")
-        } else if (!ok) showStatus("Не нашёл, как ответить (нужно разрешение «Звонки»)")
+        val clicked = clickCallButton(
+            listOf("ответить", "принять", "answer", "accept", "ответ на звонок", "поднять"),
+            listOf("answer", "accept", "pickup", "pick_up", "incall_answer", "call_accept")
+        )
+        if (clicked) Logger.log("ACC", "Ответ: кнопка на экране")
+        else if (!ok) showStatus("Не нашёл, как ответить")
     }
 
     private fun endCall() {
+        dumpClickables("СБРОС")
+        // 1) Система (если телефония видит звонок).
         var done = false
         try {
             val tm = getSystemService(TELECOM_SERVICE) as android.telecom.TelecomManager
             if (Build.VERSION.SDK_INT >= 28) { done = tm.endCall(); Logger.log("ACC", "Сброс через систему: $done") }
         } catch (e: Exception) { Logger.log("ACC", "Сброс (система): ${e.message}") }
-        // VoIP-приложения: нажать кнопку завершения на экране (TelecomManager их не завершает).
-        if (clickCallButton(listOf("завершить", "сбросить", "положить трубку", "отбой", "повесить",
-                "отклонить", "end call", "end", "decline", "hang up"))) {
-            Logger.log("ACC", "Сброс: кнопка на экране")
-        } else if (!done) showStatus("Не нашёл, как сбросить звонок")
+        if (done) return
+        // 2) Кнопка завершения на экране — по тексту/описанию И по id (надёжно, если нашли).
+        if (clickCallButton(
+                listOf("завершить", "сбросить", "положить трубку", "отбой", "повесить",
+                    "отклонить", "end call", "end", "decline", "hang up", "hangup"),
+                listOf("endcall", "end_call", "call_end", "callend", "incall_end", "hangup",
+                    "hang_up", "reject", "decline", "disconnect", "endbutton"))) {
+            Logger.log("ACC", "Сброс: кнопка на экране"); return
+        }
+        // 3) Запасные способы (телефония вызов «не видит»): медиа-клавиша отбоя + тап по красной кнопке.
+        val byKey = mediaKeyEndCall()
+        val (w, h) = screenSize()
+        doTap(w / 2f, h * 0.885f, TapKind.SINGLE)   // красная кнопка обычно внизу по центру
+        Logger.log("ACC", "Сброс: запасной (медиа-клавиша=$byKey + тап ${(w/2)},${(h*0.885f).toInt()})")
     }
 
-    /** Найти и нажать кнопку звонка по надписи/описанию (для VoIP-экранов). */
-    private fun clickCallButton(keys: List<String>): Boolean {
-        val root = rootInActiveWindow ?: return false
-        for (k in keys) {
-            val n = searchByText(root, k) ?: continue
-            val c = clickableAncestor(n) ?: if (n.isClickable) n else continue
-            if (c.isVisibleToUser) {
-                if (!c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                    val r = android.graphics.Rect(); c.getBoundsInScreen(r)
-                    doTap(r.exactCenterX(), r.exactCenterY(), TapKind.SINGLE)
-                }
-                return true
-            }
+    /** Симуляция гарнитурной клавиши/клавиши отбоя — завершает звонок независимо от телефонии. */
+    private fun mediaKeyEndCall(): Boolean = try {
+        val am = getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+        for (code in intArrayOf(android.view.KeyEvent.KEYCODE_HEADSETHOOK)) {
+            am.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, code))
+            am.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, code))
         }
-        return false
+        true
+    } catch (e: Exception) { Logger.log("ACC", "Медиа-клавиша: ${e.message}"); false }
+
+    /** Вывести в лог все кликабельные кнопки экрана (для поиска красной кнопки сброса). */
+    private fun dumpClickables(tag: String) {
+        val root = rootInActiveWindow ?: return
+        val list = mutableListOf<String>()
+        fun walk(n: AccessibilityNodeInfo?) {
+            if (n == null || list.size >= 40) return
+            if (n.isClickable && n.isVisibleToUser) {
+                val r = android.graphics.Rect(); n.getBoundsInScreen(r)
+                list.add("[t='${n.text ?: ""}' d='${n.contentDescription ?: ""}' id='${n.viewIdResourceName ?: ""}' @${r.centerX()},${r.centerY()}]")
+            }
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(root)
+        Logger.log(tag, "Кнопки экрана (${list.size}): ${list.joinToString(" ")}")
+    }
+
+    /** Найти и нажать кнопку звонка: по тексту/описанию ИЛИ по id ресурса (для иконок без текста). */
+    private fun clickCallButton(textKeys: List<String>, idKeys: List<String>): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val btn = findCallButton(root, textKeys, idKeys) ?: return false
+        if (!btn.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+            val r = android.graphics.Rect(); btn.getBoundsInScreen(r)
+            doTap(r.exactCenterX(), r.exactCenterY(), TapKind.SINGLE)
+        }
+        return true
+    }
+
+    private fun findCallButton(node: AccessibilityNodeInfo?, textKeys: List<String>, idKeys: List<String>): AccessibilityNodeInfo? {
+        if (node == null) return null
+        val txt = ((node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")).lowercase()
+        val rid = (node.viewIdResourceName ?: "").lowercase()
+        if ((textKeys.any { txt.contains(it) } || idKeys.any { rid.contains(it) })) {
+            val target = clickableAncestor(node) ?: if (node.isClickable) node else null
+            if (target != null && target.isVisibleToUser) return target
+        }
+        for (i in 0 until node.childCount) {
+            findCallButton(node.getChild(i), textKeys, idKeys)?.let { return it }
+        }
+        return null
     }
 
     private fun silenceRinger() {

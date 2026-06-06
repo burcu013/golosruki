@@ -177,6 +177,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var dictation = false
     @Volatile private var dictationDigits = false
     @Volatile var aiListening = false      // идёт свободный захват вопроса/текста для ИИ
+    @Volatile private var aiDialog = false // идёт режим диалога с ИИ (до «хватит»)
     @Volatile private var aiAsk = true     // true — вопрос, false — сформулировать текст
     @Volatile private var aiThinking = false  // идёт генерация ответа (модель «думает»)
     private val dictBuffer = StringBuilder()
@@ -662,8 +663,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                     // Текст для вставки не зачитываем — он уже в поле; только подтверждаем.
                     speak(if (composedOk) "Сгенерировал текст" else answer)
                 }
-                restartListening()   // вернуться к командам
-                resetIdle()
+                if (aiDialog && ask) startAiQuery(true)   // продолжаем диалог — снова слушаем
+                else { restartListening(); resetIdle() }   // вернуться к командам
             }
         }.start()
     }
@@ -747,8 +748,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         // чтобы вопрос всегда ловился, даже когда играет видео или активен медиа-режим.
         if (aiListening) {
             if (text.isBlank()) { resetIdle(); return }
-            if (text.contains("стоп") || text.contains("отмена") || text.contains(wakeWord)) {
-                aiListening = false
+            val exit = text.contains("стоп") || text.contains("отмена") || text.contains(wakeWord) ||
+                text.contains("хватит") || text.contains("закончили") || text.contains("достаточно") ||
+                text.contains("конец разговора") || text.contains("спасибо хватит")
+            if (exit) {
+                aiListening = false; aiDialog = false
                 VoiceAccessibilityService.instance?.showStatus(stateText())
                 restartListening(); return
             }
@@ -951,6 +955,32 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             return
         }
         lastCmdText = text
+
+        // ИИ-помощник: ловим здесь, чтобы текст ПОСЛЕ триггера не терялся (запрос одной фразой),
+        // плюс режим диалога «поговорим … хватит».
+        run {
+            val askTriggers = listOf("поразмышляй", "порассуждай", "подумай", "размышляй", "рассуждай", "спросить", "спроси", "думай")
+            val composeTriggers = listOf("сформулируй", "сформулир")
+            val dialogTriggers = listOf("поговорим", "побеседуем", "пообщаемся", "поболтаем")
+            when {
+                dialogTriggers.any { text.contains(it) } -> {
+                    aiDialog = true
+                    speak("Давайте поговорим. Чтобы закончить — скажите «хватит».")
+                    startAiQuery(true); return
+                }
+                composeTriggers.any { text.contains(it) } -> {
+                    val rest = afterAny(text, composeTriggers)
+                    if (rest.isNotBlank()) handleAi(false, rest) else startAiQuery(false)
+                    return
+                }
+                askTriggers.any { text.contains(it) } -> {
+                    val rest = afterAny(text, askTriggers)
+                    if (rest.isNotBlank()) handleAi(true, rest) else startAiQuery(true)
+                    return
+                }
+            }
+        }
+
         val cmd = CommandParser.parse(text, personal)
         Logger.log("CMD", "Команда: ${cmd.label()}")
 
@@ -978,6 +1008,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     private fun stripWake(t: String) = t.replace(wakeWord, "").trim()
     private fun stripResume(t: String) = t.replace("слушай", "").replace("продолжи", "").trim()
+    private fun afterAny(text: String, triggers: List<String>): String {
+        for (tr in triggers) { val i = text.indexOf(tr); if (i >= 0) return text.substring(i + tr.length).trim() }
+        return ""
+    }
     private fun post(action: () -> Unit) = handler.post(action)
 
     override fun onFinalResult(hypothesis: String?) { onResult(hypothesis) }

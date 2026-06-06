@@ -978,6 +978,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                     if (rest.isNotBlank()) handleAi(true, rest) else startAiQuery(true)
                     return
                 }
+                else -> {}
             }
         }
 

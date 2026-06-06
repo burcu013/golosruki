@@ -314,6 +314,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         instance = this
         Logger.init(this)
         Logger.log("SVC", "Служба запущена")
+        // Удаляем «обрезки» недокачанной модели, чтобы не пухли данные.
+        runCatching {
+            java.io.File(filesDir, "llm").listFiles()?.filter { it.name.endsWith(".part") }?.forEach { it.delete() }
+        }
         paused = false
         personal = PersonalConfig.load(this)
         wakeWord = SettingsStore.getWake(this)

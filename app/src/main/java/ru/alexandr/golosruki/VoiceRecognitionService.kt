@@ -351,7 +351,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 }
             }
             tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-                override fun onStart(id: String?) { isSpeaking = true; listeningSetPause(true) }
+                override fun onStart(id: String?) { isSpeaking = true }
                 override fun onDone(id: String?) { scheduleResume(500); post { VoiceAccessibilityService.instance?.releaseStatusHold() } }
                 @Deprecated("deprecated") override fun onError(id: String?) { scheduleResume(500) }
             })
@@ -425,11 +425,23 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.postDelayed(resumeAfterSpeak, delay)
     }
 
+    /** Прервать текущую озвучку голосом и вернуться к слушанию. */
+    private fun stopSpeaking() {
+        runCatching { tts?.stop() }
+        handler.removeCallbacks(resumeAfterSpeak)
+        isSpeaking = false
+        post {
+            VoiceAccessibilityService.instance?.releaseStatusHold()
+            VoiceAccessibilityService.instance?.showStatus(stateText())
+        }
+        resetIdle()
+    }
+
     fun speak(text: String) {
         if (!ttsEnabled || !ttsReady) return
-        // ПОЛНОСТЬЮ глушим распознавание на время речи: Vosk не копит звук синтезатора (анти-петля)
+        // Микрофон НЕ глушим: во время речи слушаем, но в onResult реагируем только на
+        // «Иван + хватит/стоп» (прерывание). Остальное в это время игнорируется (анти-петля).
         isSpeaking = true
-        listeningSetPause(true)
         runCatching {
             tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki")
         }
@@ -744,8 +756,18 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (text.isBlank()) return
         Logger.log("HEARD", "'$text' | state=$state media=$mediaControlMode dict=$dictation digits=$dictationDigits call=${inCall()} mode=${audioModeName()} tel=${telStateName()}")
 
-        // Анти-петля: пока проигрывается синтезатор, не распознаём (иначе слышим сами себя)
-        if (isSpeaking) { Logger.log("REC", "Игнор (говорит синтезатор): '$text'"); return }
+        // Во время озвучки: реагируем ТОЛЬКО на прерывание «Иван + хватит/стоп».
+        if (isSpeaking) {
+            val stopWord = text.contains("хватит") || text.contains("стоп") || text.contains("молчи") ||
+                text.contains("замолчи") || text.contains("тихо") || text.contains("прекрати")
+            if (text.contains(wakeWord) && stopWord) {
+                stopSpeaking()
+                Logger.log("REC", "Озвучка прервана голосом: '$text'")
+            } else {
+                Logger.log("REC", "Игнор (говорит синтезатор): '$text'")
+            }
+            return
+        }
 
         // Пока модель «думает» — игнорируем всё, чтобы шум не сбивал статус и не запускал команды.
         if (aiThinking) { Logger.log("AI", "(размышление) игнор: '$text'"); return }

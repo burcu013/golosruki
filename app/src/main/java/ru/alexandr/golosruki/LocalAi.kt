@@ -62,6 +62,7 @@ object LocalAi {
         }
         val useSmart = (chosen == smartPath)
         engine.useModel(chosen)
+        engine.setLowResource(!useSmart)
         Logger.log("AI", "Модель: ${if (useSmart) "умная" else "простая"}")
 
         val sys: String
@@ -78,7 +79,7 @@ object LocalAi {
                 // Персона из профиля: полная для умной модели, облегчённая для простой.
                 append(AiProfile.buildPersona(profile, full = useSmart))
             }
-            user = buildAskPrompt(userText)
+            user = buildAskPrompt(userText, useSmart)
         } else {
             sys = "Ты составляешь готовый текст на русском (письмо, сообщение, заголовок — смотри по запросу). " +
                 "Выдавай ТОЛЬКО итоговый текст, без пояснений, приветствий и подписи, если о них прямо не просят."
@@ -96,9 +97,13 @@ object LocalAi {
         return out
     }
 
-    /** Подмешиваем недавние обмены, чтобы модель «помнила» предыдущие вопросы. */
-    private fun buildAskPrompt(q: String): String {
-        if (history.isEmpty()) return q
+    /**
+     * Подмешиваем недавние обмены, чтобы модель «помнила» предыдущие вопросы.
+     * Только для умной модели: слабая (простая) не отделяет контекст от вопроса и «заражается»
+     * прошлой темой (вода → термодинамика → собаки…), поэтому ей историю не даём.
+     */
+    private fun buildAskPrompt(q: String, useHistory: Boolean): String {
+        if (!useHistory || history.isEmpty()) return q
         val ctx = history.joinToString("\n") { "П: ${it.first}\nО: ${it.second}" }
         return "Недавний разговор (для контекста):\n$ctx\n\nТекущий вопрос: $q"
     }
@@ -127,8 +132,32 @@ object LocalAi {
     }
 
     /**
-     * Постобработка ответа модели: убрать служебные маркеры, схлопнуть повторяющиеся
-     * подряд предложения (частая болезнь маленьких моделей) и лишние пробелы.
+     * Срез зацикленных повторов — болезнь слабых моделей: «с натяжкой с натяжкой…»,
+     * «слягальщик слягальщик…», «с помощью сбора данных…» по кругу. Ищем самое раннее место,
+     * где блок из 1–4 слов повторяется ≥3 раз подряд, и обрезаем вывод там (оставляем «здоровый» префикс).
+     */
+    private fun stripRepetition(t: String): String {
+        val words = t.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (words.size < 6) return t
+        val lw = words.map { it.lowercase() }
+        var cut = -1
+        loop@ for (i in words.indices) {
+            for (l in 1..4) {
+                if (i + 3 * l > words.size) continue
+                var same = true
+                for (k in 0 until l) {
+                    if (lw[i + k] != lw[i + l + k] || lw[i + k] != lw[i + 2 * l + k]) { same = false; break }
+                }
+                if (same) { cut = i; break@loop }
+            }
+        }
+        if (cut < 0) return t
+        return words.subList(0, cut).joinToString(" ")
+    }
+
+    /**
+     * Постобработка ответа модели: убрать служебные маркеры, срезать зацикленные повторы,
+     * схлопнуть повторяющиеся подряд предложения и лишние пробелы.
      */
     private fun clean(s: String): String {
         var t = s.trim()
@@ -137,6 +166,10 @@ object LocalAi {
             val i = t.indexOf(m); if (i >= 0) t = t.substring(0, i)
         }
         t = t.replace("<end_of_turn>", " ").replace("<start_of_turn>", " ").trim()
+        // Срез зацикленных повторов (до дедупликации предложений).
+        val stripped = stripRepetition(t)
+        val wasCut = stripped.length < t.length
+        t = stripped
         // Схлопываем подряд идущие одинаковые предложения.
         val parts = t.split(Regex("(?<=[.!?…])\\s+"))
         val uniq = ArrayList<String>()
@@ -147,6 +180,10 @@ object LocalAi {
         t = uniq.joinToString(" ")
         // Чистим пробелы/переносы.
         t = t.replace(Regex("[ \\t]{2,}"), " ").replace(Regex("\\n{3,}"), "\n\n").trim()
+        // Если после среза повторов остался лишь обрывок — честный ответ вместо мусора.
+        val wc = t.split(Regex("\\s+")).count { it.isNotEmpty() }
+        if (wasCut && wc < 3)
+            return "Не получилось внятно ответить — простая модель не справилась. Для сложных вопросов включите умную модель в Настройки → Модели ИИ."
         return t.ifBlank { "Пустой ответ." }
     }
 }

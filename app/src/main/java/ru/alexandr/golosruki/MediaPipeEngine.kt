@@ -19,6 +19,9 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
     @Volatile private var loadError: String? = null
     @Volatile private var activePath: String? = null   // выбранный путь (null → путь по умолчанию)
     @Volatile private var loadedPath: String? = null   // что реально загружено сейчас
+    @Volatile private var lowResource = false          // текущий слот — слабая «простая» модель
+
+    override fun setLowResource(v: Boolean) { lowResource = v }
 
     companion object {
         fun modelFile(ctx: Context): File = File(SettingsStore.getAiModelPath(ctx))
@@ -51,7 +54,7 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
         return try {
             val opts = LlmInferenceOptions.builder()
                 .setModelPath(path)
-                .setMaxTokens(512)
+                .setMaxTokens(if (lowResource) 320 else 512)
                 .build()
             llm = LlmInference.createFromOptions(appContext, opts)
             loadedPath = path
@@ -96,10 +99,11 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
     /** Генерация с управляемой выборкой. Возвращает null, если сессионный API недоступен (тогда откат). */
     private fun generateWithSession(engine: LlmInference, prompt: String): String? {
         return try {
+            // Слабой модели — жёстче выборка: меньше блуждания и зацикленных повторов.
             val opts = LlmInferenceSessionOptions.builder()
-                .setTopK(40)
-                .setTopP(0.95f)
-                .setTemperature(0.7f)
+                .setTopK(if (lowResource) 20 else 40)
+                .setTopP(if (lowResource) 0.9f else 0.95f)
+                .setTemperature(if (lowResource) 0.35f else 0.7f)
                 .build()
             val session = LlmInferenceSession.createFromOptions(engine, opts)
             session.addQueryChunk(prompt)

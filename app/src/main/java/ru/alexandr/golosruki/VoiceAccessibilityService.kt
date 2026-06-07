@@ -252,6 +252,44 @@ class VoiceAccessibilityService : AccessibilityService() {
     // --- Номера на кликабельных элементах ---
     private var maxNodeArea = Long.MAX_VALUE
 
+    private val agentTargets = HashMap<Int, Rect>()
+
+    /** Собрать видимые действия экрана для агента: пронумерованный список с подписями. */
+    fun collectAgentScreen(): String {
+        val root = rootInActiveWindow ?: return "Экран недоступен"
+        agentTargets.clear()
+        val (w, h) = screenSize()
+        val maxArea = (0.85 * w * h).toLong()
+        val rectsSeen = mutableListOf<Rect>()
+        val lines = StringBuilder()
+        var n = 1
+        fun walk(node: AccessibilityNodeInfo?) {
+            if (node == null || n > 30) return
+            if (node.isVisibleToUser && isCandidate(node)) {
+                val r = Rect(); node.getBoundsInScreen(r)
+                val area = r.width().toLong() * r.height()
+                if (r.width() > 0 && r.height() > 0 && area in 1 until maxArea && rectsSeen.none { isClose(it, r) }) {
+                    val raw = (node.text ?: node.contentDescription ?: "").toString().trim().replace("\n", " ")
+                    val label = if (raw.isBlank()) "кнопка" else raw.take(30)
+                    agentTargets[n] = r; rectsSeen.add(r)
+                    lines.append("$n) $label${if (node.isEditable) " (поле ввода)" else ""}\n")
+                    n++
+                }
+            }
+            for (i in 0 until node.childCount) walk(node.getChild(i))
+        }
+        walk(root)
+        val app = root.packageName?.toString() ?: "?"
+        return "Приложение: $app\n${lines.toString().trim()}"
+    }
+
+    /** Нажать элемент по номеру из collectAgentScreen. */
+    fun agentTap(number: Int): Boolean {
+        val r = agentTargets[number] ?: return false
+        tapAt(r.exactCenterX(), r.exactCenterY(), TapKind.SINGLE)
+        return true
+    }
+
     private fun showNumbers() {
         mode = Mode.NUMBERS
         targets.clear()

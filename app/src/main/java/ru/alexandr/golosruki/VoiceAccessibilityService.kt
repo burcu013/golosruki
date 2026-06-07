@@ -187,8 +187,10 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     private var lastRecordPoint: android.graphics.PointF? = null
 
-    // Ключевые слова для поиска кнопок по тексту/описанию (text + contentDescription).
-    private val recordKeys = listOf("запис", "голосов", "микрофон", "voice", "record", "видеосообщ", "video mess", "audio mess")
+    // Голосовая кнопка — ТОЛЬКО голос (видео исключаем намеренно: в Telegram/VK рядом есть видеосообщение).
+    private val voiceKeys = listOf("голосов", "voice", "audio mess", "звуков")
+    private val avoidKeys = listOf("видео", "video", "эмодзи", "emoji", "стикер", "sticker", "gif",
+        "прикреп", "вложени", "медиа", "attach", "камер", "camera", "сообщени", "message", "поиск", "search")
     private val sendKeys = listOf("отправ", "send")
     private val cancelKeys = listOf("отмен", "удалить", "delete", "cancel", "discard", "корзин", "trash")
 
@@ -224,25 +226,33 @@ class VoiceAccessibilityService : AccessibilityService() {
         return false
     }
 
-    /** Точка кнопки записи: по описанию → самая правая небольшая кнопка внизу → null. */
+    /** Точка голосовой кнопки: по описанию (только голос, не видео) → правая нижняя кнопка → null. */
     private fun findRecordButtonPoint(): Pair<android.graphics.PointF, String>? {
         val root = rootInActiveWindow ?: return null
         val (w, h) = screenSize()
-        findNodeByKeywords(recordKeys, false, true)?.let { n ->
-            nodeCenter(n)?.let { return it to "по описанию" }
-        }
-        val cands = ArrayList<Rect>()
+        var voice: android.graphics.PointF? = null
+        val fallback = ArrayList<Rect>()
         fun walk(n: AccessibilityNodeInfo?) {
             if (n == null) return
-            if (n.isVisibleToUser && (n.isClickable || n.isLongClickable)) {
+            if (n.isVisibleToUser) {
+                val d = ((n.contentDescription ?: n.text ?: "").toString()).lowercase()
                 val r = Rect(); n.getBoundsInScreen(r)
-                if (r.width() in 1 until (w * 0.35f).toInt() && r.exactCenterY() > h * 0.80f) cands.add(r)
+                val avoid = avoidKeys.any { d.contains(it) }
+                if (voice == null && d.isNotBlank() && !avoid && voiceKeys.any { d.contains(it) } &&
+                    r.width() > 0 && r.height() > 0) {
+                    voice = android.graphics.PointF(r.exactCenterX(), r.exactCenterY())
+                }
+                if ((n.isClickable || n.isLongClickable) && !avoid &&
+                    r.exactCenterY() > h * 0.75f && r.width() in 1 until (w * 0.45f).toInt()) {
+                    fallback.add(r)
+                }
             }
             for (i in 0 until n.childCount) walk(n.getChild(i))
         }
         walk(root)
-        val best = cands.maxByOrNull { it.exactCenterX() }
-        return best?.let { android.graphics.PointF(it.exactCenterX(), it.exactCenterY()) to "правая нижняя кнопка" }
+        voice?.let { return it to "голосовая кнопка" }
+        return fallback.maxByOrNull { it.exactCenterX() }
+            ?.let { android.graphics.PointF(it.exactCenterX(), it.exactCenterY()) to "правая нижняя кнопка" }
     }
 
     /** Диагностика: пишем в лог нижние интерактивные узлы (помогает понять раскладку конкретного мессенджера). */

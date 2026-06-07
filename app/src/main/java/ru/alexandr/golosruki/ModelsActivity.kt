@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
 import android.os.Bundle
+import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -14,7 +15,11 @@ import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
 import java.io.File
 
-/** Менеджер моделей ИИ: список (лёгкая → мощная), скачивание по токену HF, выбор активной. */
+/**
+ * Менеджер моделей ИИ: каталог (от лёгкой к мощной), скачивание по токену HF,
+ * два слота — «умная» и «простая» — и режим маршрутизации (Авто / Только простая / Только умная).
+ * В памяти держится одна модель: в «Авто» смена слота = выгрузка+загрузка (несколько секунд).
+ */
 class ModelsActivity : ComponentActivity() {
 
     private data class ModelDef(
@@ -25,7 +30,7 @@ class ModelsActivity : ComponentActivity() {
     // Курируемый список: от лёгкой к мощной. Все — формат .task (бандл для MediaPipe), под лицензией Gemma.
     private val catalog = listOf(
         ModelDef("g3-1b", "Gemma 3 1B (int4)", "~550 МБ",
-            "Самая лёгкая, для теста. Слабая в математике и рассуждениях.",
+            "Самая лёгкая, быстрая. Хороша как «простая». Слабая в математике и рассуждениях.",
             "https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/gemma3-1b-it-int4.task?download=true",
             "gemma3-1b-int4.task"),
         ModelDef("g3n-e2b", "Gemma 3n E2B (int4) — рекомендуется", "~3 ГБ",
@@ -40,6 +45,17 @@ class ModelsActivity : ComponentActivity() {
 
     private lateinit var status: TextView
     private lateinit var token: EditText
+    private lateinit var customUrl: EditText
+
+    private val statusViews = HashMap<String, TextView>()
+    private val smartBtns = HashMap<String, Button>()
+    private val simpleBtns = HashMap<String, Button>()
+
+    private lateinit var modeAuto: Button
+    private lateinit var modeSimple: Button
+    private lateinit var modeSmart: Button
+    private lateinit var slotSmartView: TextView
+    private lateinit var slotSimpleView: TextView
 
     private val pickModel = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
@@ -52,6 +68,24 @@ class ModelsActivity : ComponentActivity() {
 
         status = UiKit.body(this, "")
         col.addView(status)
+
+        // Режим маршрутизации
+        val mc = UiKit.card(this)
+        mc.addView(UiKit.sectionHeader(this, "Режим ответов"))
+        mc.addView(UiKit.body(this, "Как выбирать модель для «Иван, спроси…». «Авто» — лёгкие вопросы на простую, сложные на умную (если установлены обе). В памяти держится одна модель: при «Авто» переключение занимает несколько секунд."))
+        modeAuto = UiKit.iconButton(this, "Авто") { applyMode("auto") }
+        modeSimple = UiKit.iconButton(this, "Только простая") { applyMode("simple") }
+        modeSmart = UiKit.iconButton(this, "Только умная") { applyMode("smart") }
+        mc.addView(modeAuto); mc.addView(modeSimple); mc.addView(modeSmart)
+        col.addView(mc)
+
+        // Текущие слоты
+        val sc = UiKit.card(this)
+        sc.addView(UiKit.sectionHeader(this, "Текущие слоты"))
+        slotSmartView = UiKit.body(this, ""); sc.addView(slotSmartView)
+        slotSimpleView = UiKit.body(this, ""); sc.addView(slotSimpleView)
+        sc.addView(UiKit.hint(this, "Слабому телефону хватит одной «простой» модели и режима «Только простая». На мощном — поставьте обе и «Авто»."))
+        col.addView(sc)
 
         // Токен HuggingFace
         val tk = UiKit.card(this)
@@ -72,36 +106,35 @@ class ModelsActivity : ComponentActivity() {
             c.addView(UiKit.body(this, "${m.size}. ${m.note}"))
             val st = UiKit.body(this, "")
             c.addView(st)
-            c.addView(UiKit.button(this, "📥 Скачать и выбрать") { download(m) })
-            c.addView(UiKit.button(this, "✓ Использовать (если уже скачана)") { useModel(m) })
             statusViews[m.id] = st
+            val sb = UiKit.iconButton(this, "") { setSlot(m, "smart") }
+            val pb = UiKit.iconButton(this, "", R.drawable.btn_amber) { setSlot(m, "simple") }
+            smartBtns[m.id] = sb; simpleBtns[m.id] = pb
+            c.addView(sb); c.addView(pb)
             col.addView(c)
         }
 
-        // Своя ссылка
+        // Своя ссылка / файл
         val cu = UiKit.card(this)
         cu.addView(UiKit.sectionHeader(this, "Своя ссылка (.task)"))
-        cu.addView(UiKit.body(this, "Если у модели другое имя файла или другой источник — вставьте прямую ссылку на .task."))
+        cu.addView(UiKit.body(this, "Если у модели другое имя файла или другой источник — вставьте прямую ссылку на .task. Скачанная назначается умной (если умная ещё не выбрана)."))
         customUrl = EditText(this).apply { hint = "https://…/model.task" }
         cu.addView(customUrl)
         cu.addView(UiKit.button(this, "📥 Скачать по ссылке") {
             val u = customUrl.text.toString().trim()
-            if (u.startsWith("http")) download(ModelDef("custom", "своя модель", "", "", u, "custom.task"))
+            if (u.startsWith("http")) download(ModelDef("custom", "своя модель", "", "", u, "custom.task"), "auto")
             else status.text = "Вставьте корректную ссылку."
         })
-        cu.addView(UiKit.button(this, "📂 Выбрать файл с устройства (.task)") {
+        cu.addView(UiKit.button(this, "📂 Выбрать файл с устройства (.task) → умная") {
             runCatching { pickModel.launch(arrayOf("*/*")) }.onFailure { status.text = "Не удалось открыть выбор файла." }
         })
         col.addView(cu)
 
-        col.addView(UiKit.hint(this, "Активная модель используется для «Иван, спроси…». После смены модели первый ответ будет с задержкой (загрузка)."))
+        col.addView(UiKit.hint(this, "После смены модели первый ответ будет с задержкой — модель загружается в память."))
 
         setContentView(ScrollView(this).apply { addView(col) })
         refresh()
     }
-
-    private val statusViews = HashMap<String, TextView>()
-    private lateinit var customUrl: EditText
 
     private fun llmDir(): File = File(filesDir, "llm").apply { mkdirs() }
 
@@ -115,7 +148,7 @@ class ModelsActivity : ComponentActivity() {
         } else {
             when (val r = ModelDownloadService.lastResult) {
                 null -> {}
-                "OK" -> { refresh(); }
+                "OK" -> { refresh() }
                 else -> status.text = "Загрузка не удалась: $r"
             }
         }
@@ -133,29 +166,79 @@ class ModelsActivity : ComponentActivity() {
         runCatching { unregisterReceiver(dlReceiver) }
     }
 
-    private fun refresh() {
-        val active = SettingsStore.getAiModelPath(this)
-        val af = File(active)
-        status.text = if (af.exists() && af.length() > 50_000_000L)
-            "Активная модель: ${af.name} (${af.length() / (1024 * 1024)} МБ) ✅"
-        else "Активная модель не выбрана ❌"
-        for (m in catalog) {
-            val f = File(llmDir(), m.file)
-            val isActive = f.absolutePath == active
-            statusViews[m.id]?.text = when {
-                f.exists() && isActive -> "Скачана и активна ⭐"
-                f.exists() -> "Скачана ✓ (нажмите «Использовать»)"
-                else -> "Не скачана"
-            }
+    private fun applyMode(mode: String) {
+        SettingsStore.setAiRouteMode(this, mode)
+        styleMode()
+        status.text = when (mode) {
+            "simple" -> "Режим: только простая модель."
+            "smart" -> "Режим: только умная модель."
+            else -> "Режим: Авто (лёгкое — простой, сложное — умной)."
         }
     }
 
-    private fun useModel(m: ModelDef) {
+    private fun styleMode() {
+        val mode = SettingsStore.getAiRouteMode(this)
+        modeAuto.setBackgroundResource(if (mode == "auto") R.drawable.btn_primary else R.drawable.btn_amber)
+        modeSimple.setBackgroundResource(if (mode == "simple") R.drawable.btn_primary else R.drawable.btn_amber)
+        modeSmart.setBackgroundResource(if (mode == "smart") R.drawable.btn_primary else R.drawable.btn_amber)
+        modeAuto.text = (if (mode == "auto") "✓ " else "") + "Авто"
+        modeSimple.text = (if (mode == "simple") "✓ " else "") + "Только простая"
+        modeSmart.text = (if (mode == "smart") "✓ " else "") + "Только умная"
+    }
+
+    private fun installed(f: File): Boolean = f.exists() && f.length() > 50_000_000L
+
+    /** Назначить модель в слот; если файл ещё не скачан — скачать его сразу в нужный слот. */
+    private fun setSlot(m: ModelDef, slot: String) {
         val f = File(llmDir(), m.file)
-        if (!f.exists() || f.length() < 50_000_000L) { status.text = "Сначала скачайте «${m.title}»."; return }
-        SettingsStore.setAiModelPath(this, f.absolutePath)
+        if (installed(f)) {
+            assign(f.absolutePath, slot)
+            status.text = "«${m.title}» — теперь ${if (slot == "smart") "умная" else "простая"}."
+        } else {
+            download(m, slot)
+        }
+    }
+
+    private fun assign(path: String, slot: String) {
+        if (slot == "smart") SettingsStore.setAiModelPath(this, path)
+        else SettingsStore.setAiModelSimplePath(this, path)
         LocalAi.engine.unload(); LocalAi.clearHistory()
-        refresh(); status.text = "Выбрана модель «${m.title}»."
+        refresh()
+    }
+
+    private fun refresh() {
+        val smart = SettingsStore.getAiModelPath(this)
+        val simple = SettingsStore.getAiModelSimplePath(this)
+        val smartOk = MediaPipeEngine.modelInstalledAt(smart)
+        val simpleOk = MediaPipeEngine.modelInstalledAt(simple)
+
+        slotSmartView.text = "🧠 Умная: " + if (smartOk) "${File(smart).name} ✅" else "не выбрана ❌"
+        slotSimpleView.text = "⚡ Простая: " + if (simpleOk) "${File(simple).name} ✅" else "не выбрана ❌"
+        styleMode()
+
+        val parts = ArrayList<String>()
+        if (smartOk) parts.add("умная")
+        if (simpleOk) parts.add("простая")
+        status.text = if (parts.isEmpty()) "Модель не установлена ❌ — скачайте ниже."
+            else "Установлено: ${parts.joinToString(", ")}."
+
+        for (m in catalog) {
+            val f = File(llmDir(), m.file)
+            val present = installed(f)
+            val isSmart = present && f.absolutePath == smart
+            val isSimple = present && f.absolutePath == simple
+            statusViews[m.id]?.text = if (!present) "Не скачана" else buildString {
+                append("Скачана ✓")
+                if (isSmart) append(" · сейчас умная ⭐")
+                if (isSimple) append(" · сейчас простая ⭐")
+            }
+            smartBtns[m.id]?.text = if (present) "🧠 Сделать умной" else "📥 Скачать как умную"
+            simpleBtns[m.id]?.text = if (present) "⚡ Сделать простой" else "📥 Скачать как простую"
+        }
+    }
+
+    private fun slotWord(slot: String): String = when (slot) {
+        "smart" -> "умной"; "simple" -> "простой"; else -> "активной"
     }
 
     private fun copyLocal(uri: Uri) {
@@ -180,13 +263,13 @@ class ModelsActivity : ComponentActivity() {
                 if (res.isSuccess) {
                     SettingsStore.setAiModelPath(this, res.getOrThrow())
                     LocalAi.engine.unload(); LocalAi.clearHistory(); refresh()
-                    status.text = "Готово ✅ Модель установлена и выбрана."
+                    status.text = "Готово ✅ Модель установлена как умная."
                 } else { tmp.delete(); status.text = "Не удалось скопировать: ${res.exceptionOrNull()?.message}" }
             }
         }.start()
     }
 
-    private fun download(m: ModelDef) {
+    private fun download(m: ModelDef, slot: String) {
         val tok = SettingsStore.getHfToken(this)
         val dest = File(llmDir(), m.file).absolutePath
         val i = Intent(this, ModelDownloadService::class.java)
@@ -194,8 +277,9 @@ class ModelsActivity : ComponentActivity() {
             .putExtra(ModelDownloadService.EX_TOKEN, tok)
             .putExtra(ModelDownloadService.EX_DEST, dest)
             .putExtra(ModelDownloadService.EX_LABEL, m.title)
+            .putExtra(ModelDownloadService.EX_SLOT, slot)
         runCatching { startForegroundService(i) }
-            .onSuccess { status.text = "Загрузка «${m.title}» идёт в фоне — прогресс и скорость в шторке уведомлений. Окно можно закрыть." }
+            .onSuccess { status.text = "Загрузка «${m.title}» идёт в фоне — прогресс в шторке уведомлений. По завершении станет ${slotWord(slot)}. Окно можно закрыть." }
             .onFailure { status.text = "Не удалось запустить загрузку: ${it.message}" }
     }
 }

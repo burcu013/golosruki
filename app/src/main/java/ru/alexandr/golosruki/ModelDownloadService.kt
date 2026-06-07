@@ -26,6 +26,7 @@ class ModelDownloadService : Service() {
         const val ACTION_STOP = "ru.alexandr.golosruki.DL_STOP"
         const val ACTION_PROGRESS = "ru.alexandr.golosruki.DL_PROGRESS"
         const val EX_URL = "url"; const val EX_TOKEN = "token"; const val EX_DEST = "dest"; const val EX_LABEL = "label"
+        const val EX_SLOT = "slot"   // "smart" | "simple" | "auto" (по умолчанию)
         @Volatile var active = false
         @Volatile var statusText = ""
         @Volatile var lastResult: String? = null   // null — нет данных; "OK" — успех; иначе текст ошибки
@@ -45,11 +46,14 @@ class ModelDownloadService : Service() {
         val token = intent.getStringExtra(EX_TOKEN) ?: ""
         val dest = intent.getStringExtra(EX_DEST) ?: return stopNow()
         val label = intent.getStringExtra(EX_LABEL) ?: "модель"
+        dlSlot = intent.getStringExtra(EX_SLOT) ?: "auto"
         cancelFlag = false; active = true; lastResult = null; statusText = "Подготовка…"
         startForeground(NID, build(label, "Подготовка…", 0, true))
         Thread { run(url, token, dest, label) }.start()
         return START_NOT_STICKY
     }
+
+    @Volatile private var dlSlot = "auto"
 
     private fun stopNow(): Int { stopSelf(); return START_NOT_STICKY }
 
@@ -102,10 +106,18 @@ class ModelDownloadService : Service() {
             dstFile.absolutePath
         }
         if (res.isSuccess) {
-            SettingsStore.setAiModelPath(this, res.getOrThrow())
+            val path = res.getOrThrow()
+            when (dlSlot) {
+                "smart" -> SettingsStore.setAiModelPath(this, path)
+                "simple" -> SettingsStore.setAiModelSimplePath(this, path)
+                // "auto": первая скачанная модель становится умной; иначе только кладём файл, слот не трогаем.
+                else -> if (!MediaPipeEngine.modelInstalledAt(SettingsStore.getAiModelPath(this)))
+                            SettingsStore.setAiModelPath(this, path)
+            }
             runCatching { LocalAi.engine.unload(); LocalAi.clearHistory() }
-            lastResult = "OK"; statusText = "Готово ✅ «$label» установлена"
-            notifyDone("Готово ✅", "«$label» скачана и выбрана")
+            val where = when (dlSlot) { "smart" -> " — умная"; "simple" -> " — простая"; else -> "" }
+            lastResult = "OK"; statusText = "Готово ✅ «$label»$where"
+            notifyDone("Готово ✅", "«$label» скачана$where")
         } else {
             tmp.delete()
             val msg = res.exceptionOrNull()?.message ?: "ошибка"

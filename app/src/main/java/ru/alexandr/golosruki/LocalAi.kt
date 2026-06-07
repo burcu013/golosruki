@@ -60,8 +60,9 @@ object LocalAi {
             isComplex(userText) -> if (smartOk) smartPath else simplePath
             else -> if (simpleOk) simplePath else smartPath          // лёгкое — простой, если есть
         }
+        val useSmart = (chosen == smartPath)
         engine.useModel(chosen)
-        Logger.log("AI", "Модель: ${if (chosen == simplePath) "простая" else "умная"}")
+        Logger.log("AI", "Модель: ${if (useSmart) "умная" else "простая"}")
 
         val sys: String
         val user: String
@@ -74,10 +75,8 @@ object LocalAi {
                 append("Простое — 1–2 предложения; «порассуждай», «объясни», «посоветуй» — подробнее. ")
                 append("Рассуждения, советы, мнения, общие знания — отвечай содержательно, не уходи в «не знаю». ")
                 append("«Не уверен» — только про то, чего не можешь знать: свежие новости, цены, номера законов, статистику, точные даты; не выдумывай их. ")
-                if (profile.capabilities.contains(AiProfile.CAP_SPEECH_ONLY)) {
-                    append("У пользователя не действуют руки — не предлагай действий руками и фраз «попросите близкого». ")
-                }
-                if (profile.name.isNotBlank()) append("Имя пользователя: ${profile.name}. ")
+                // Персона из профиля: полная для умной модели, облегчённая для простой.
+                append(AiProfile.buildPersona(profile, full = useSmart))
             }
             user = buildAskPrompt(userText)
         } else {

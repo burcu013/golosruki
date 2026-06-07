@@ -17,30 +17,48 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
 
     @Volatile private var llm: LlmInference? = null
     @Volatile private var loadError: String? = null
+    @Volatile private var activePath: String? = null   // выбранный путь (null → путь по умолчанию)
+    @Volatile private var loadedPath: String? = null   // что реально загружено сейчас
 
     companion object {
         fun modelFile(ctx: Context): File = File(SettingsStore.getAiModelPath(ctx))
         /** Считаем модель установленной, если файл есть и весит разумно (>50 МБ). */
         fun modelInstalled(ctx: Context): Boolean =
             modelFile(ctx).let { it.exists() && it.length() > 50_000_000L }
+        /** Проверка установки конкретного файла модели (для маршрутизации между слотами). */
+        fun modelInstalledAt(path: String): Boolean =
+            File(path).let { it.exists() && it.length() > 50_000_000L }
     }
 
     override fun isReady(): Boolean = llm != null || modelInstalled(appContext)
 
+    /** Выбрать модель по пути. Если это другая модель — выгружаем, чтобы при следующей генерации загрузилась нужная. */
+    override fun useModel(path: String) {
+        if (path.isBlank() || path == loadedPath) return
+        runCatching { llm?.close() }
+        llm = null; loadError = null
+        activePath = path
+        Logger.log("AI", "Переключение модели → ${File(path).name}")
+    }
+
+    private fun currentPath(): String = activePath ?: SettingsStore.getAiModelPath(appContext)
+
     @Synchronized
     private fun ensureLoaded(): Boolean {
         if (llm != null) return true
-        if (!modelInstalled(appContext)) { loadError = "файл модели не найден"; return false }
+        val path = currentPath()
+        if (!modelInstalledAt(path)) { loadError = "файл модели не найден"; return false }
         return try {
             val opts = LlmInferenceOptions.builder()
-                .setModelPath(modelFile(appContext).absolutePath)
+                .setModelPath(path)
                 .setMaxTokens(512)
                 .build()
             llm = LlmInference.createFromOptions(appContext, opts)
+            loadedPath = path
             loadError = null
             true
         } catch (e: Throwable) {
-            val f = modelFile(appContext)
+            val f = File(path)
             val mb = if (f.exists()) f.length() / (1024 * 1024) else 0L
             val isZip = runCatching {
                 f.inputStream().use { ins ->

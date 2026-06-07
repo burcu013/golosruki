@@ -43,9 +43,25 @@ object LocalAi {
         }
         // 4) Мета-вопросы о самом помощнике — мгновенно, без модели (экономия).
         if (ask) metaAnswer(userText)?.let { Logger.log("AI", "Мета-ответ: $it"); return it }
-        if (!engine.isReady()) {
+
+        // Маршрутизация между слотами моделей (умная/простая) по режиму и сложности.
+        val smartPath = SettingsStore.getAiModelPath(ctx)
+        val simplePath = SettingsStore.getAiModelSimplePath(ctx)
+        val smartOk = MediaPipeEngine.modelInstalledAt(smartPath)
+        val simpleOk = MediaPipeEngine.modelInstalledAt(simplePath)
+        if (!smartOk && !simpleOk) {
             return "Модель ИИ не установлена. Откройте Настройки → ИИ → загрузить модель. Запрос понял: «$userText»."
         }
+        val mode = SettingsStore.getAiRouteMode(ctx)
+        val chosen = when {
+            mode == "simple" && simpleOk -> simplePath
+            mode == "smart" && smartOk -> smartPath
+            !ask -> if (smartOk) smartPath else simplePath           // составление текста — лучше умной
+            isComplex(userText) -> if (smartOk) smartPath else simplePath
+            else -> if (simpleOk) simplePath else smartPath          // лёгкое — простой, если есть
+        }
+        engine.useModel(chosen)
+        Logger.log("AI", "Модель: ${if (chosen == simplePath) "простая" else "умная"}")
 
         val sys: String
         val user: String
@@ -86,6 +102,18 @@ object LocalAi {
         if (history.isEmpty()) return q
         val ctx = history.joinToString("\n") { "П: ${it.first}\nО: ${it.second}" }
         return "Недавний разговор (для контекста):\n$ctx\n\nТекущий вопрос: $q"
+    }
+
+    /** Тяжёлый ли запрос — для выбора умной модели в авто-режиме. */
+    private fun isComplex(q: String): Boolean {
+        val s = q.lowercase()
+        val kw = listOf(
+            "порассужд", "рассужд", "размышл", "объясни", "почему", "сравни", "разниц",
+            "посоветуй", "совет", "придумай", "сочини", "напиши", "составь", "план",
+            "идеи", "как лучше", "что лучше", "как мне", "стих", "расскажи про", "расскажи о"
+        )
+        if (kw.any { s.contains(it) }) return true
+        return q.trim().split(Regex("\\s+")).size > 8
     }
 
     /** Мгновенные ответы про самого помощника — без обращения к модели. */

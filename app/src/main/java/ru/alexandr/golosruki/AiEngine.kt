@@ -12,6 +12,8 @@ interface AiEngine {
     /** Сгенерировать ответ. Блокирующий вызов — выполнять в фоновом потоке. */
     fun generate(systemPrompt: String, userText: String): String
     fun unload()
+    /** Выбрать активную модель по пути (для маршрутизации между слотами). По умолчанию ничего. */
+    fun useModel(path: String) {}
 }
 
 /** Заглушка: движок ещё не подключён (реальный MediaPipe — следующий этап). */

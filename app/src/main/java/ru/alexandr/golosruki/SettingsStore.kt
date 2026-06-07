@@ -129,6 +129,15 @@ object SettingsStore {
     fun getAiModelPath(ctx: Context): String =
         p(ctx).getString("ai_model_path", null) ?: java.io.File(ctx.filesDir, "llm/model.task").absolutePath
     fun setAiModelPath(ctx: Context, v: String) = p(ctx).edit().putString("ai_model_path", v).apply()
+
+    // Второй слот — «простая» (быстрая) модель для лёгких запросов / слабых устройств.
+    fun getAiModelSimplePath(ctx: Context): String =
+        p(ctx).getString("ai_model_simple_path", null) ?: java.io.File(ctx.filesDir, "llm/model_simple.task").absolutePath
+    fun setAiModelSimplePath(ctx: Context, v: String) = p(ctx).edit().putString("ai_model_simple_path", v).apply()
+
+    // Режим маршрутизации: "auto" | "simple" | "smart".
+    fun getAiRouteMode(ctx: Context): String = p(ctx).getString("ai_route_mode", "auto") ?: "auto"
+    fun setAiRouteMode(ctx: Context, v: String) = p(ctx).edit().putString("ai_route_mode", v).apply()
     // Токен HuggingFace для скачивания закрытых моделей (Gemma)
     fun getHfToken(ctx: Context): String = p(ctx).getString("hf_token", "") ?: ""
     fun setHfToken(ctx: Context, v: String) = p(ctx).edit().putString("hf_token", v.trim()).apply()

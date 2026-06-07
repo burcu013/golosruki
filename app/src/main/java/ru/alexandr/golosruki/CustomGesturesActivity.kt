@@ -60,17 +60,14 @@ class CustomGesturesActivity : ComponentActivity() {
         val map = GestureStore.getCustomGestures(this)
         if (map.isEmpty()) { listBox.addView(UiKit.body(this, "Пока нет жестов.")); return }
         for ((word, _) in map) {
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
-                setPadding(0, UiKit.dp(this@CustomGesturesActivity, 6), 0, UiKit.dp(this@CustomGesturesActivity, 6))
-            }
-            row.addView(TextView(this).apply {
-                text = "«$word»"; textSize = 17f
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            listBox.addView(TextView(this).apply {
+                text = "• «$word»  —  вызов: «Иван $word»"
+                textSize = 18f
+                setTypeface(UiKit.fontSemi(this@CustomGesturesActivity))
+                setTextColor(android.graphics.Color.parseColor("#1C1E22"))
+                setPadding(0, UiKit.dp(this@CustomGesturesActivity, 12), 0, 0)
             })
-            row.addView(UiKit.iconButton(this, "Удалить", R.drawable.btn_amber) { delete(word) })
-            listBox.addView(row)
+            listBox.addView(UiKit.iconButton(this, "🗑 Удалить «$word»", R.drawable.btn_amber) { delete(word) })
         }
     }
 

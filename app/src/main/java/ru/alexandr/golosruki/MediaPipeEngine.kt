@@ -3,6 +3,8 @@ package ru.alexandr.golosruki
 import android.content.Context
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import com.google.mediapipe.tasks.genai.llminference.LlmInference.LlmInferenceOptions
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession.LlmInferenceSessionOptions
 import java.io.File
 
 /**
@@ -63,11 +65,32 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
         }
         Logger.logSync("AI", "Старт генерации (длина запроса ${prompt.length})")
         return try {
-            val r = engine.generateResponse(prompt)?.trim().orEmpty().ifBlank { "Пустой ответ от модели." }
-            Logger.log("AI", "Генерация завершена (${r.length} симв.)")
-            r
+            // Сначала пробуем сессию с параметрами выборки (фокуснее, меньше блуждания).
+            val r = generateWithSession(engine, prompt) ?: engine.generateResponse(prompt)
+            val out = r?.trim().orEmpty().ifBlank { "Пустой ответ от модели." }
+            Logger.log("AI", "Генерация завершена (${out.length} симв.)")
+            out
         } catch (e: Throwable) {
             "Ошибка генерации: ${e.message ?: e.javaClass.simpleName}"
+        }
+    }
+
+    /** Генерация с управляемой выборкой. Возвращает null, если сессионный API недоступен (тогда откат). */
+    private fun generateWithSession(engine: LlmInference, prompt: String): String? {
+        return try {
+            val opts = LlmInferenceSessionOptions.builder()
+                .setTopK(40)
+                .setTopP(0.95f)
+                .setTemperature(0.7f)
+                .build()
+            val session = LlmInferenceSession.createFromOptions(engine, opts)
+            session.addQueryChunk(prompt)
+            val r = session.generateResponse()
+            runCatching { session.close() }
+            r
+        } catch (e: Throwable) {
+            Logger.log("AI", "Сессия недоступна (${e.javaClass.simpleName}) — обычный режим")
+            null
         }
     }
 

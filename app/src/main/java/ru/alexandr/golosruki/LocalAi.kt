@@ -41,6 +41,8 @@ object LocalAi {
         if (ask && userText.lowercase().contains("погод")) {
             val w = Weather.describe(ctx); Logger.log("AI", "Погода: $w"); return w
         }
+        // 4) Мета-вопросы о самом помощнике — мгновенно, без модели (экономия).
+        if (ask) metaAnswer(userText)?.let { Logger.log("AI", "Мета-ответ: $it"); return it }
         if (!engine.isReady()) {
             return "Модель ИИ не установлена. Откройте Настройки → ИИ → загрузить модель. Запрос понял: «$userText»."
         }
@@ -49,14 +51,13 @@ object LocalAi {
         val user: String
         if (ask) {
             sys = buildString {
-                append("Ты — Иван, умный доброжелательный голосовой помощник. ")
-                append("Свободно общаешься на любые темы: рассуждаешь, советуешь, придумываешь, делишься мнением. Отвечай по-русски, живо и по сути. ")
+                append("Ты — Иван, голосовой помощник. Отвечай по-русски, по делу, законченной мыслью, без воды и повторов. ")
                 val now = java.text.SimpleDateFormat("d MMMM yyyy, EEEE, HH:mm", java.util.Locale("ru", "RU")).format(java.util.Date())
                 append("Сейчас $now. ")
-                append("Не здоровайся и не задавай встречных вопросов — сразу отвечай. ")
-                append("Длину подбирай под вопрос: на простое и конкретное отвечай коротко (1–2 предложения), на просьбы порассуждать, объяснить или посоветовать — развёрнуто. ")
-                append("На мнения, рассуждения, советы и общие знания отвечай содержательно, не отговаривайся «не знаю». ")
-                append("«Не уверен» говори только про факты, которых не можешь знать (свежие новости, точные цены, номера законов, статистику, даты) — их не выдумывай. ")
+                append("Не здоровайся и не переспрашивай — сразу отвечай. ")
+                append("Простое — 1–2 предложения; «порассуждай», «объясни», «посоветуй» — подробнее. ")
+                append("Рассуждения, советы, мнения, общие знания — отвечай содержательно, не уходи в «не знаю». ")
+                append("«Не уверен» — только про то, чего не можешь знать: свежие новости, цены, номера законов, статистику, точные даты; не выдумывай их. ")
                 if (profile.capabilities.contains(AiProfile.CAP_SPEECH_ONLY)) {
                     append("У пользователя не действуют руки — не предлагай действий руками и фраз «попросите близкого». ")
                 }
@@ -64,13 +65,14 @@ object LocalAi {
             }
             user = buildAskPrompt(userText)
         } else {
-            sys = "Ты помогаешь составить готовый текст на русском языке (письмо, сообщение, заголовок, ответ — смотри по запросу). " +
-                "Выдавай ТОЛЬКО итоговый текст, без пояснений. Не добавляй приветствие и подпись, если о них прямо не просят."
+            sys = "Ты составляешь готовый текст на русском (письмо, сообщение, заголовок — смотри по запросу). " +
+                "Выдавай ТОЛЬКО итоговый текст, без пояснений, приветствий и подписи, если о них прямо не просят."
             user = "Составь текст по запросу: «$userText». Выдай только готовый текст."
         }
 
-        val out = runCatching { engine.generate(sys, user) }
+        val raw = runCatching { engine.generate(sys, user) }
             .getOrElse { "Не удалось получить ответ ИИ. Попробуйте ещё раз." }
+        val out = if (raw.startsWith("Модель") || raw.startsWith("Ошибка") || raw.startsWith("Не удалось")) raw else clean(raw)
 
         if (ask && out.isNotBlank() && !out.startsWith("Модель") && !out.startsWith("Ошибка")) {
             history.addLast(userText to out)
@@ -84,5 +86,40 @@ object LocalAi {
         if (history.isEmpty()) return q
         val ctx = history.joinToString("\n") { "П: ${it.first}\nО: ${it.second}" }
         return "Недавний разговор (для контекста):\n$ctx\n\nТекущий вопрос: $q"
+    }
+
+    /** Мгновенные ответы про самого помощника — без обращения к модели. */
+    private fun metaAnswer(q: String): String? {
+        val s = q.lowercase()
+        val about = s.contains("как тебя зовут") || s.contains("как тебя звать") ||
+            s.contains("кто ты") || s.contains("ты кто") || s.contains("как тебя") && s.contains("имя")
+        if (about) return "Меня зовут Иван — ваш голосовой помощник."
+        if (s.contains("что ты умеешь") || s.contains("на что ты способен") || s.contains("твои возможности"))
+            return "Я отвечаю на вопросы и рассуждаю, считаю, говорю время, дату, заряд и погоду, набираю текст и помогаю управлять телефоном голосом."
+        return null
+    }
+
+    /**
+     * Постобработка ответа модели: убрать служебные маркеры, схлопнуть повторяющиеся
+     * подряд предложения (частая болезнь маленьких моделей) и лишние пробелы.
+     */
+    private fun clean(s: String): String {
+        var t = s.trim()
+        // Обрезаем всё, что модель могла дописать после конца своей реплики.
+        listOf("<end_of_turn>", "<start_of_turn>", "<eos>").forEach { m ->
+            val i = t.indexOf(m); if (i >= 0) t = t.substring(0, i)
+        }
+        t = t.replace("<end_of_turn>", " ").replace("<start_of_turn>", " ").trim()
+        // Схлопываем подряд идущие одинаковые предложения.
+        val parts = t.split(Regex("(?<=[.!?…])\\s+"))
+        val uniq = ArrayList<String>()
+        for (p in parts) {
+            val norm = p.trim().lowercase()
+            if (norm.isNotEmpty() && (uniq.isEmpty() || uniq.last().trim().lowercase() != norm)) uniq.add(p.trim())
+        }
+        t = uniq.joinToString(" ")
+        // Чистим пробелы/переносы.
+        t = t.replace(Regex("[ \\t]{2,}"), " ").replace(Regex("\\n{3,}"), "\n\n").trim()
+        return t.ifBlank { "Пустой ответ." }
     }
 }

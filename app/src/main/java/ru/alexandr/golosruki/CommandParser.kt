@@ -220,27 +220,48 @@ object CommandParser {
         }
     }
 
-    /** Совпадение контакта: учитывает склонения, искажения распознавания и разбиение слова. */
+    /**
+     * Совпадение контакта. Приоритет: точное совпадение по ВСЕМ контактам раньше любого нечёткого —
+     * иначе короткое похожее имя (маме) перехватывает звонок раньше точного (папе).
+     * Порог Левенштейна зависит от длины: для коротких имён (≤4 букв) ≤1 правки, иначе ≤2 —
+     * чтобы «папе» не схлопывалось в «маме» (расстояние 2 = половина слова).
+     */
     private fun matchContact(t: String, contacts: Map<String, String>): Pair<String, String>? {
-        val trig = setOf("позвони", "набери", "звонок", "вызови")
-        val words = t.split(" ").filter { it.isNotBlank() && it !in trig }
+        val skip = setOf("позвони", "набери", "звонок", "вызови", "иван")
+        val words = t.split(" ").filter { it.isNotBlank() && it !in skip }
         if (words.isEmpty()) return null
-        val joined = words.joinToString("")          // «жюри ку» -> «жюрику»
-        val phrase = words.joinToString(" ")          // «любимой жене»
-        // сначала проверяем более длинные (конкретные) имена
+        val joined = words.joinToString("")           // «жюри ку» -> «жюрику»
+        val phrase = words.joinToString(" ")          // «любимой рите»
+        // сначала более длинные (конкретные) имена
         val sorted = contacts.entries.filter { it.value.isNotBlank() }.sortedByDescending { it.key.length }
+
+        // ПРОХОД 1 — точное вхождение имени целиком или его последнего слова («рите» из «любимой рите»).
         for (e in sorted) {
-            val name = e.key; val num = e.value
+            val name = e.key
+            if (phrase.contains(name) || t.contains(name)) return name to e.value
+            val last = name.substringAfterLast(" ")
+            if (last != name && last.length >= 3 && words.any { it == last }) return name to e.value
             val nameJoined = name.replace(" ", "")
-            if (phrase.contains(name) || t.contains(name)) return name to num
-            if (nameJoined.length >= 4 && (joined.contains(nameJoined) || nameJoined.contains(joined))) return name to num
-            val stem = name.take(maxOf(3, name.length - 2))
-            if (stem.length >= 3 && words.any { it.startsWith(stem) }) return name to num
-            // нечётко: по склеенной строке (исправляет «жюри ку»→«жорику») и по отдельным словам
-            if (nameJoined.length >= 4 && joined.length >= 4 && levenshtein(joined, nameJoined) <= 2) return name to num
-            if (name.length >= 4 && words.any { it.length >= 3 && levenshtein(it, name) <= 2 }) return name to num
+            if (nameJoined.length >= 5 && (joined.contains(nameJoined) || nameJoined.contains(joined))) return name to e.value
         }
-        return null
+        // ПРОХОД 2 — по основе каждого слова контакта (префикс).
+        for (e in sorted) {
+            for (tok in e.key.split(" ").filter { it.length >= 3 }) {
+                val stem = tok.take(maxOf(3, tok.length - 2))
+                if (words.any { it.startsWith(stem) }) return e.key to e.value
+            }
+        }
+        // ПРОХОД 3 — нечёткое: выбираем НАИЛУЧШЕЕ совпадение со строгим порогом.
+        var best: Pair<String, String>? = null
+        var bestD = Int.MAX_VALUE
+        for (e in sorted) {
+            for (tok in e.key.split(" ").filter { it.length >= 3 }) {
+                val thr = if (tok.length <= 4) 1 else 2
+                val d = words.filter { it.length >= 3 }.minOfOrNull { levenshtein(it, tok) } ?: continue
+                if (d <= thr && d < bestD) { bestD = d; best = e.key to e.value }
+            }
+        }
+        return best
     }
 
     private fun levenshtein(a: String, b: String): Int {

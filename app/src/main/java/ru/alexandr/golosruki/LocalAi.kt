@@ -70,14 +70,18 @@ object LocalAi {
         if (ask) {
             sys = buildString {
                 append("Ты — Иван, голосовой помощник. Отвечай по-русски, по делу, законченной мыслью, без воды и повторов. ")
-                val now = java.text.SimpleDateFormat("d MMMM yyyy, EEEE, HH:mm", java.util.Locale("ru", "RU")).format(java.util.Date())
-                append("Сейчас $now. ")
+                if (useSmart) {
+                    val now = java.text.SimpleDateFormat("d MMMM yyyy, EEEE, HH:mm", java.util.Locale("ru", "RU")).format(java.util.Date())
+                    append("Сейчас $now. ")
+                }
                 append("Не здоровайся и не переспрашивай — сразу отвечай. ")
                 append("Простое — 1–2 предложения; «порассуждай», «объясни», «посоветуй» — подробнее. ")
                 append("Рассуждения, советы, мнения, общие знания — отвечай содержательно, не уходи в «не знаю». ")
                 append("«Не уверен» — только про то, чего не можешь знать: свежие новости, цены, номера законов, статистику, точные даты; не выдумывай их. ")
                 // Персона из профиля: полная для умной модели, облегчённая для простой.
                 append(AiProfile.buildPersona(profile, full = useSmart))
+                // Слабая модель ломается на длинных ответах и списках — держим её в коротком формате.
+                if (!useSmart) append("Отвечай коротко: одно-два законченных предложения, без списков и перечислений. ")
             }
             user = buildAskPrompt(userText, useSmart)
         } else {
@@ -134,7 +138,7 @@ object LocalAi {
     /**
      * Срез зацикленных повторов — болезнь слабых моделей: «с натяжкой с натяжкой…»,
      * «слягальщик слягальщик…», «с помощью сбора данных…» по кругу. Ищем самое раннее место,
-     * где блок из 1–4 слов повторяется ≥3 раз подряд, и обрезаем вывод там (оставляем «здоровый» префикс).
+     * где блок из 1–6 слов повторяется ≥3 раз подряд, и обрезаем вывод там (оставляем «здоровый» префикс).
      */
     private fun stripRepetition(t: String): String {
         val words = t.split(Regex("\\s+")).filter { it.isNotEmpty() }
@@ -142,7 +146,7 @@ object LocalAi {
         val lw = words.map { it.lowercase() }
         var cut = -1
         loop@ for (i in words.indices) {
-            for (l in 1..4) {
+            for (l in 1..6) {
                 if (i + 3 * l > words.size) continue
                 var same = true
                 for (k in 0 until l) {
@@ -156,8 +160,28 @@ object LocalAi {
     }
 
     /**
+     * Обрезка оборванного хвоста (модель упёрлась в лимит токенов и закончила на полуслове:
+     * «…с хоро», «…* М», «3. За»). Короткие ответы не трогаем — они обычно цельные.
+     * Длинный ответ без финальной точки режем до последней границы предложения и убираем
+     * висячий маркер списка. Если границы нет — отрезаем оборванное слово и ставим «…».
+     */
+    private fun trimUnfinished(t: String): String {
+        val s = t.trimEnd()
+        if (s.isEmpty()) return s
+        if (s.last() == '.' || s.last() == '!' || s.last() == '?' || s.last() == '…') return s
+        if (s.split(Regex("\\s+")).size <= 10) return s   // короткое — вероятно закончено
+        var idx = -1
+        for (i in s.indices) { val c = s[i]; if (c == '.' || c == '!' || c == '?' || c == '…') idx = i }
+        var r = if (idx >= 2) s.substring(0, idx + 1)
+                else s.substringBeforeLast(' ', s).trimEnd() + "…"
+        // Убираем оставшийся висячий маркер списка в конце («… 3.», «… *»).
+        r = r.replace(Regex("\\s*\\d+\\.\\s*$"), "").replace(Regex("\\s*[*•]\\s*$"), "").trimEnd()
+        return r.ifBlank { s }
+    }
+
+    /**
      * Постобработка ответа модели: убрать служебные маркеры, срезать зацикленные повторы,
-     * схлопнуть повторяющиеся подряд предложения и лишние пробелы.
+     * схлопнуть повторяющиеся подряд предложения, обрезать оборванный хвост и лишние пробелы.
      */
     private fun clean(s: String): String {
         var t = s.trim()
@@ -184,6 +208,8 @@ object LocalAi {
         val wc = t.split(Regex("\\s+")).count { it.isNotEmpty() }
         if (wasCut && wc < 3)
             return "Не получилось внятно ответить — простая модель не справилась. Для сложных вопросов включите умную модель в Настройки → Модели ИИ."
+        // Обрезаем оборванный по лимиту токенов хвост.
+        t = trimUnfinished(t)
         return t.ifBlank { "Пустой ответ." }
     }
 }

@@ -176,6 +176,16 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var state = State.ASLEEP
     @Volatile private var dictation = false
     @Volatile private var dictationDigits = false
+    @Volatile private var recordingVoice = false   // идёт запись голосового: глушим всё, кроме «Иван отправь/отмена»
+
+    private val recordingOff = Runnable { recordingVoice = false; Logger.log("REC", "Запись голосового: авто-сброс по таймауту") }
+    /** Включает/выключает режим записи голосового. В нём команды не парсятся — нужен явный «Иван отправь/отмена». */
+    fun setRecordingVoice(v: Boolean) {
+        recordingVoice = v
+        handler.removeCallbacks(recordingOff)
+        if (v) handler.postDelayed(recordingOff, 120_000)   // страховка от залипания
+        VoiceAccessibilityService.instance?.showStatus(stateText())
+    }
     @Volatile var aiListening = false      // идёт свободный захват вопроса/текста для ИИ
     @Volatile private var aiDialog = false // идёт режим диалога с ИИ (до «хватит»)
     @Volatile private var lastAiQuestion = "" // последний вопрос к ИИ (для «подробнее»)
@@ -463,6 +473,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     private fun stateText(): String = when {
+        recordingVoice -> "🎙 Запись: «${cap(wakeWord)} отправь» или «${cap(wakeWord)} отмена»"
         aiThinking -> "🧠 Думаю…"
         aiListening -> if (aiAsk) "🧠 Слушаю вопрос — говорите" else "🧠 Что сформулировать — говорите"
         dictation && dictationDigits -> "✍️ Диктовка цифрами — «готово» для выхода"
@@ -772,6 +783,25 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
         // Пока модель «думает» — игнорируем всё, чтобы шум не сбивал статус и не запускал команды.
         if (aiThinking) { Logger.log("AI", "(размышление) игнор: '$text'"); return }
+
+        // ИДЁТ ЗАПИСЬ ГОЛОСОВОГО. Речь пользователя пишется в сообщение и НЕ должна дёргать команды.
+        // Принимаем только «<слово> отправь/отправить» (тап по кнопке записи = отправка) и «<слово> отмена» (Назад).
+        if (recordingVoice) {
+            val hasWake = text.contains(wakeWord)
+            val rest = if (hasWake) stripWake(text) else text
+            when {
+                hasWake && rest.contains("отправ") -> {
+                    Logger.log("REC", "Запись голосового → отправка")
+                    post { VoiceAccessibilityService.instance?.execute(Command.RecordSend) }
+                }
+                hasWake && (rest.contains("отмен") || rest.contains("назад") || rest.contains("стоп")) -> {
+                    Logger.log("REC", "Запись голосового → отмена")
+                    post { VoiceAccessibilityService.instance?.execute(Command.RecordCancel) }
+                }
+                else -> Logger.log("REC", "Запись голосового: игнор '$text'")
+            }
+            return
+        }
 
         // Свободный захват вопроса/текста для ИИ — приоритетно (выше медиа/экрана),
         // чтобы вопрос всегда ловился, даже когда играет видео или активен медиа-режим.

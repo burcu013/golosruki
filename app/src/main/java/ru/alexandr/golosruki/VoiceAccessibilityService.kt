@@ -134,6 +134,7 @@ class VoiceAccessibilityService : AccessibilityService() {
             is Command.SetVolume -> setVolumeLevel(command.level)
             is Command.RecordVoice -> recordVoice(command.number)
             Command.RecordSend -> recordSend()
+            Command.RecordCancel -> recordCancel()
             Command.MediaPause -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
             Command.MediaPlay -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PLAY)
             Command.MediaNext -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_NEXT)
@@ -192,16 +193,26 @@ class VoiceAccessibilityService : AccessibilityService() {
         lastRecordPoint = p
         val path = Path().apply { moveTo(p.x, p.y); lineTo(p.x, (p.y - h * 0.20f).coerceAtLeast(h * 0.18f)) }
         gesture(path, 600)
-        showStatus("🎙 Запись голосового — говорите, потом «отправь»")
-        VoiceRecognitionService.instance?.speak("Записываю. Скажите отправь, когда закончите")
+        VoiceRecognitionService.instance?.setRecordingVoice(true)
+        showStatus("🎙 Запись — скажите «${cap()} отправь» или «${cap()} отмена»")
+        VoiceRecognitionService.instance?.speak("Записываю. Скажите Иван отправь, когда закончите")
     }
     private fun recordSend() {
         val (w, h) = screenSize()
         val p = lastRecordPoint ?: android.graphics.PointF(w * 0.92f, h * 0.92f)
+        VoiceRecognitionService.instance?.setRecordingVoice(false)
         doTap(p.x, p.y, TapKind.SINGLE)
         lastRecordPoint = null
         showStatus("Голосовое отправлено")
     }
+    private fun recordCancel() {
+        VoiceRecognitionService.instance?.setRecordingVoice(false)
+        lastRecordPoint = null
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        showStatus("Запись голосового отменена")
+    }
+    private fun cap(): String = VoiceRecognitionService.instance?.wakeWordPublic()
+        ?.replaceFirstChar { it.uppercase() } ?: "Иван"
 
     // --- Скролл: сначала пробуем прокрутить нужный контейнер, иначе жест по центру ---
     private fun setVolumeLevel(level: Int) {

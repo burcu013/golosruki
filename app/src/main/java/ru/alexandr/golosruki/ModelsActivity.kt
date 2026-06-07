@@ -50,6 +50,7 @@ class ModelsActivity : ComponentActivity() {
     private val statusViews = HashMap<String, TextView>()
     private val smartBtns = HashMap<String, Button>()
     private val simpleBtns = HashMap<String, Button>()
+    private var pendingSlot = "smart"   // в какой слот класть выбранный с устройства файл
 
     private lateinit var modeAuto: Button
     private lateinit var modeSimple: Button
@@ -114,20 +115,18 @@ class ModelsActivity : ComponentActivity() {
             col.addView(c)
         }
 
-        // Своя ссылка / файл
+        // Своя модель: своя ссылка или файл с устройства — с выбором слота
         val cu = UiKit.card(this)
-        cu.addView(UiKit.sectionHeader(this, "Своя ссылка (.task)"))
-        cu.addView(UiKit.body(this, "Если у модели другое имя файла или другой источник — вставьте прямую ссылку на .task. Скачанная назначается умной (если умная ещё не выбрана)."))
-        customUrl = EditText(this).apply { hint = "https://…/model.task" }
+        cu.addView(UiKit.sectionHeader(this, "Своя модель (.task)"))
+        cu.addView(UiKit.body(this, "Если модель уже лежит в файлах телефона или есть прямая ссылка — добавьте её и выберите слот: умная или простая. Файлы слотов хранятся отдельно и не затирают друг друга."))
+        customUrl = EditText(this).apply { hint = "https://…/model.task (для скачивания по ссылке)" }
         cu.addView(customUrl)
-        cu.addView(UiKit.button(this, "📥 Скачать по ссылке") {
-            val u = customUrl.text.toString().trim()
-            if (u.startsWith("http")) download(ModelDef("custom", "своя модель", "", "", u, "custom.task"), "auto")
-            else status.text = "Вставьте корректную ссылку."
-        })
-        cu.addView(UiKit.button(this, "📂 Выбрать файл с устройства (.task) → умная") {
-            runCatching { pickModel.launch(arrayOf("*/*")) }.onFailure { status.text = "Не удалось открыть выбор файла." }
-        })
+        cu.addView(UiKit.body(this, "Скачать по ссылке в слот:"))
+        cu.addView(UiKit.iconButton(this, "🧠 По ссылке → умная") { downloadCustom("smart") })
+        cu.addView(UiKit.iconButton(this, "⚡ По ссылке → простая", R.drawable.btn_amber) { downloadCustom("simple") })
+        cu.addView(UiKit.body(this, "Выбрать файл с устройства в слот:"))
+        cu.addView(UiKit.iconButton(this, "🧠 Файл с устройства → умная") { pickInto("smart") })
+        cu.addView(UiKit.iconButton(this, "⚡ Файл с устройства → простая", R.drawable.btn_amber) { pickInto("simple") })
         col.addView(cu)
 
         col.addView(UiKit.hint(this, "После смены модели первый ответ будет с задержкой — модель загружается в память."))
@@ -241,11 +240,27 @@ class ModelsActivity : ComponentActivity() {
         "smart" -> "умной"; "simple" -> "простой"; else -> "активной"
     }
 
+    private fun pickInto(slot: String) {
+        pendingSlot = slot
+        runCatching { pickModel.launch(arrayOf("*/*")) }
+            .onFailure { status.text = "Не удалось открыть выбор файла." }
+    }
+
+    private fun downloadCustom(slot: String) {
+        val u = customUrl.text.toString().trim()
+        if (!u.startsWith("http")) { status.text = "Вставьте корректную ссылку на .task."; return }
+        val file = if (slot == "simple") "custom_simple.task" else "custom_smart.task"
+        download(ModelDef("custom", "своя модель", "", "", u, file), slot)
+    }
+
     private fun copyLocal(uri: Uri) {
-        status.text = "Копирую файл модели… не закрывайте экран."
+        val slot = pendingSlot
+        val slotRu = if (slot == "simple") "простая" else "умная"
+        status.text = "Копирую файл модели в слот «$slotRu»… не закрывайте экран."
         Thread {
-            val dst = File(llmDir(), "picked.task")
-            val tmp = File(llmDir(), "picked.task.part")
+            val name = if (slot == "simple") "picked_simple.task" else "picked_smart.task"
+            val dst = File(llmDir(), name)
+            val tmp = File(llmDir(), "$name.part")
             val res = runCatching {
                 contentResolver.openInputStream(uri)!!.use { input ->
                     tmp.outputStream().use { out ->
@@ -261,9 +276,8 @@ class ModelsActivity : ComponentActivity() {
             }
             runOnUiThread {
                 if (res.isSuccess) {
-                    SettingsStore.setAiModelPath(this, res.getOrThrow())
-                    LocalAi.engine.unload(); LocalAi.clearHistory(); refresh()
-                    status.text = "Готово ✅ Модель установлена как умная."
+                    assign(res.getOrThrow(), slot)
+                    status.text = "Готово ✅ Модель установлена как $slotRu."
                 } else { tmp.delete(); status.text = "Не удалось скопировать: ${res.exceptionOrNull()?.message}" }
             }
         }.start()

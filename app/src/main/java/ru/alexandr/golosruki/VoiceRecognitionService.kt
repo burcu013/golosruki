@@ -179,13 +179,6 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile var aiListening = false      // идёт свободный захват вопроса/текста для ИИ
     @Volatile private var aiDialog = false // идёт режим диалога с ИИ (до «хватит»)
     @Volatile private var lastAiQuestion = "" // последний вопрос к ИИ (для «подробнее»)
-    @Volatile private var agentListening = false // захват свободного намерения для агента
-    private var pendingPlan: List<String>? = null
-    @Volatile private var agentGoal = ""
-    private var agentSteps = 0
-    private val agentHistory = mutableListOf<String>()
-    private var pendingAgentSend = false
-    @Volatile private var agentActive = false      // агент работает — слушаем только прерывание/подтверждение
     @Volatile private var aiAsk = true     // true — вопрос, false — сформулировать текст
     @Volatile private var aiThinking = false  // идёт генерация ответа (модель «думает»)
     private val dictBuffer = StringBuilder()
@@ -649,134 +642,6 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     /** Старт свободного захвата вопроса/текста для ИИ (после «Иван спроси…» / «Иван сформулируй…»). */
-    /** Агент: начать захват свободного намерения («сделай …», «выполни …»). */
-    fun startAgentQuery() {
-        if (!AiProfile.load(this).enabled) {
-            VoiceAccessibilityService.instance?.showStatus("🧠 ИИ выключен — включите в настройках")
-            speak("ИИ-помощник выключен. Включите его в настройках.")
-            return
-        }
-        agentListening = true
-        aiListening = true
-        VoiceAccessibilityService.instance?.showStatus("🤖 Скажите, что сделать")
-        Logger.log("AGENT", "Захват намерения")
-        restartListening()
-        resetIdle()
-    }
-
-    private fun handleAgent(intent: String) {
-        if (intent.isBlank()) { finishAgent(); return }
-        agentActive = true
-        agentGoal = intent
-        agentSteps = 0
-        agentHistory.clear()
-        pendingAgentSend = false
-        handler.removeCallbacks(idleRunnable)
-        Logger.log("AGENT", "Цель: '$intent'")
-        speak("Выполняю. Чтобы остановить — скажите «Иван стоп».")
-        restartListening()
-        handler.postDelayed({ agentLoop() }, 1500)
-    }
-
-    private fun agentLoop() {
-        if (!agentActive || agentGoal.isBlank()) return
-        if (agentSteps >= 8) { speak("Не смог завершить за восемь шагов. Останавливаюсь."); finishAgent(); return }
-        agentSteps++
-        handler.removeCallbacks(idleRunnable)
-        VoiceAccessibilityService.instance?.showStatus("🤖 Шаг $agentSteps… (скажите «Иван стоп» для отмены)")
-        Thread {
-            val screen = VoiceAccessibilityService.instance?.collectAgentScreen() ?: "Экран недоступен"
-            Logger.log("AGENT", "Экран:\n$screen")
-            val action = LocalAi.nextAction(this, agentGoal, screen, agentHistory)
-            post { if (agentActive) executeAgentAction(action) }
-        }.start()
-    }
-
-    private fun executeAgentAction(action: String) {
-        val up = action.uppercase()
-        Logger.log("AGENT", "Действие: $action")
-        agentHistory.add(action)
-        when {
-            up.startsWith("ГОТОВО") -> { speak("Готово"); finishAgent() }
-            up.startsWith("ОТКРОЙ") -> {
-                val arg = argAfter(action)
-                val num = arg.toIntOrNull()
-                if (num != null) {   // модель спутала с тапом по номеру
-                    VoiceAccessibilityService.instance?.agentTap(num); scheduleAgentStep(1900)
-                } else { runNatural("открой $arg"); scheduleAgentStep(2800) }
-            }
-            up.startsWith("НАЖМИ") -> {
-                val n = firstNum(action)
-                if (n != null) {
-                    if (VoiceAccessibilityService.instance?.agentTap(n) != true) Logger.log("AGENT", "Не нашёл элемент $n")
-                } else {
-                    val label = argAfter(action)   // модель назвала подпись вместо номера
-                    if (label.isNotBlank()) runNatural("нажми $label")
-                }
-                scheduleAgentStep(1900)
-            }
-            up.startsWith("ВПИШИ") -> {
-                val n = firstNum(action)
-                val txt = if (n != null) action.substringAfter(n.toString(), "").trim() else argAfter(action)
-                if (n != null) {
-                    VoiceAccessibilityService.instance?.agentTap(n)
-                    handler.postDelayed({ if (txt.isNotBlank()) insertComposed(txt) }, 800)
-                } else {
-                    // номер не указан — пишем в текущее активное поле
-                    if (txt.isNotBlank()) insertComposed(txt)
-                }
-                scheduleAgentStep(2800)
-            }
-            up.startsWith("ВВОД") -> {
-                // Отправка — только после голосового подтверждения.
-                pendingAgentSend = true
-                speak("Отправить? Скажите «Иван выполняй» или «отмена».")
-                VoiceAccessibilityService.instance?.showStatus("🤖 Отправить? «Иван выполняй» / «отмена»")
-                restartListening()
-            }
-            up.startsWith("НАЗАД") -> { VoiceAccessibilityService.instance?.execute(Command.Back); scheduleAgentStep(1600) }
-            up.startsWith("ДОМОЙ") -> { VoiceAccessibilityService.instance?.execute(Command.Home); scheduleAgentStep(1600) }
-            else -> { Logger.log("AGENT", "Непонятный шаг — стоп"); speak("Не понял шаг. Останавливаюсь."); finishAgent() }
-        }
-    }
-
-    private fun confirmAgentSend(yes: Boolean) {
-        pendingAgentSend = false
-        if (yes) { VoiceAccessibilityService.instance?.execute(Command.EnterKey); scheduleAgentStep(1700) }
-        else { speak("Отменил отправку. Останавливаюсь."); finishAgent() }
-    }
-
-    private fun scheduleAgentStep(delay: Long) {
-        if (!agentActive) return
-        handler.postDelayed({ agentLoop() }, delay)
-    }
-
-    private fun abortAgent() {
-        Logger.log("AGENT", "Прервано пользователем")
-        speak("Остановил")
-        finishAgent()
-    }
-
-    /** Завершить агента и УЙТИ В СОН — чтобы не ловить посторонний шум как команды. */
-    private fun finishAgent() {
-        agentActive = false
-        agentGoal = ""
-        agentSteps = 0
-        pendingAgentSend = false
-        agentListening = false
-        aiListening = false
-        handler.removeCallbacks(idleRunnable)
-        state = State.ASLEEP
-        VoiceAccessibilityService.instance?.showStatus("😴 Сон — скажите «Иван»")
-        restartListening()
-    }
-
-    private fun runNatural(cmd: String) {
-        VoiceAccessibilityService.instance?.execute(CommandParser.parse(cmd, personal))
-    }
-
-    private fun argAfter(s: String): String = s.substringAfter(' ', "").trim()
-    private fun firstNum(s: String): Int? = Regex("\\d+").find(s)?.value?.toIntOrNull()
 
     fun startAiQuery(ask: Boolean) {
         if (!AiProfile.load(this).enabled) {
@@ -908,19 +773,6 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         // Пока модель «думает» — игнорируем всё, чтобы шум не сбивал статус и не запускал команды.
         if (aiThinking) { Logger.log("AI", "(размышление) игнор: '$text'"); return }
 
-        // Пока работает агент — слушаем ТОЛЬКО прерывание и подтверждение отправки. Всё прочее игнор.
-        if (agentActive) {
-            if (text.contains(wakeWord) && (text.contains("стоп") || text.contains("отмена") || text.contains("хватит"))) {
-                abortAgent(); return
-            }
-            if (pendingAgentSend) {
-                if (text.contains("выполняй") || text.contains("давай") || text.trim() == "да") { confirmAgentSend(true); return }
-                if (text.contains("отмена") || text.contains("нет") || text.contains("стоп")) { confirmAgentSend(false); return }
-            }
-            Logger.log("AGENT", "Игнор (агент работает): '$text'")
-            return
-        }
-
         // Свободный захват вопроса/текста для ИИ — приоритетно (выше медиа/экрана),
         // чтобы вопрос всегда ловился, даже когда играет видео или активен медиа-режим.
         if (aiListening) {
@@ -929,13 +781,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 text.contains("хватит") || text.contains("закончили") || text.contains("достаточно") ||
                 text.contains("конец разговора") || text.contains("спасибо хватит")
             if (exit) {
-                aiListening = false; aiDialog = false; agentListening = false
+                aiListening = false; aiDialog = false
                 VoiceAccessibilityService.instance?.showStatus(stateText())
                 restartListening(); return
             }
             aiListening = false
-            if (agentListening) { agentListening = false; handleAgent(text.trim()) }
-            else handleAi(aiAsk, text.trim())
+            handleAi(aiAsk, text.trim())
             return
         }
 
@@ -1140,10 +991,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             val askTriggers = listOf("поразмышляй", "порассуждай", "подумай", "размышляй", "рассуждай", "спросить", "спроси", "думай")
             val composeTriggers = listOf("сформулируй", "сформулир")
             val dialogTriggers = listOf("поговорим", "побеседуем", "пообщаемся", "поболтаем")
-            val agentTriggers = listOf("сделай", "выполни")
             val moreTriggers = listOf("подробнее", "подробней", "развёрнуто", "развернуто", "поподробнее")
             when {
-                agentTriggers.any { text.contains(it) } -> { startAgentQuery(); return }
                 moreTriggers.any { text.contains(it) } && lastAiQuestion.isNotBlank() -> {
                     handleAi(true, "$lastAiQuestion. Ответь подробно и развёрнуто.")
                     return

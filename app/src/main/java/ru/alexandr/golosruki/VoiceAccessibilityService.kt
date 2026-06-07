@@ -269,8 +269,7 @@ class VoiceAccessibilityService : AccessibilityService() {
                 val r = Rect(); node.getBoundsInScreen(r)
                 val area = r.width().toLong() * r.height()
                 if (r.width() > 0 && r.height() > 0 && area in 1 until maxArea && rectsSeen.none { isClose(it, r) }) {
-                    val raw = (node.text ?: node.contentDescription ?: "").toString().trim().replace("\n", " ")
-                    val label = if (raw.isBlank()) "кнопка" else raw.take(30)
+                    val label = bestLabel(node)
                     agentTargets[n] = r; rectsSeen.add(r)
                     lines.append("$n) $label${if (node.isEditable) " (поле ввода)" else ""}\n")
                     n++
@@ -288,6 +287,31 @@ class VoiceAccessibilityService : AccessibilityService() {
         val r = agentTargets[number] ?: return false
         tapAt(r.exactCenterX(), r.exactCenterY(), TapKind.SINGLE)
         return true
+    }
+
+    /** Лучшая доступная подпись узла: текст → описание → текст ребёнка → имя ресурса. */
+    private fun bestLabel(node: AccessibilityNodeInfo): String {
+        node.text?.toString()?.trim()?.let { if (it.isNotBlank()) return it.replace("\n", " ").take(30) }
+        node.contentDescription?.toString()?.trim()?.let { if (it.isNotBlank()) return it.replace("\n", " ").take(30) }
+        firstChildText(node, 0)?.let { if (it.isNotBlank()) return it.replace("\n", " ").take(30) }
+        node.viewIdResourceName?.let {
+            val name = it.substringAfterLast('/').replace('_', ' ').trim()
+            if (name.isNotBlank()) return name.take(30)
+        }
+        return "кнопка"
+    }
+
+    private fun firstChildText(node: AccessibilityNodeInfo, depth: Int): String? {
+        if (depth > 3) return null
+        for (i in 0 until node.childCount) {
+            val c = node.getChild(i) ?: continue
+            val t = c.text?.toString()?.trim().takeUnless { it.isNullOrBlank() }
+                ?: c.contentDescription?.toString()?.trim().takeUnless { it.isNullOrBlank() }
+            if (!t.isNullOrBlank()) return t
+            val deep = firstChildText(c, depth + 1)
+            if (!deep.isNullOrBlank()) return deep
+        }
+        return null
     }
 
     private fun showNumbers() {

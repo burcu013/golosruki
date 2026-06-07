@@ -52,44 +52,45 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
         val path = currentPath()
         if (!modelInstalledAt(path)) { loadError = "файл модели не найден"; return false }
         val pref = SettingsStore.getAiBackend(appContext)
-        // Порядок попыток: gpu→только GPU, cpu→только CPU, auto→GPU, затем откат на CPU.
-        val order = when (pref) {
+        // GPU у части .task-бандлов считает бракованно (мусор на выходе) и при этом НЕ падает,
+        // поэтому «Авто» = бэкенд MediaPipe по умолчанию (проверенно рабочий), GPU — только явный выбор.
+        val order: List<LlmInference.Backend?> = when (pref) {
             "gpu" -> listOf(LlmInference.Backend.GPU)
             "cpu" -> listOf(LlmInference.Backend.CPU)
-            else -> listOf(LlmInference.Backend.GPU, LlmInference.Backend.CPU)
+            else -> listOf(null)   // авто: не задаём preferredBackend
         }
         for (backend in order) {
             if (tryLoad(path, backend)) {
                 loadedPath = path; loadError = null
-                Logger.log("AI", "Модель загружена на ${if (backend == LlmInference.Backend.GPU) "GPU" else "CPU"} (режим: $pref)")
+                val name = when (backend) { LlmInference.Backend.GPU -> "GPU"; LlmInference.Backend.CPU -> "CPU"; else -> "по умолчанию" }
+                Logger.log("AI", "Модель загружена (бэкенд: $name, режим: $pref)")
                 return true
             }
         }
         return false
     }
 
-    /** Одна попытка загрузки на конкретном бэкенде. Ошибку запоминаем в loadError. */
-    private fun tryLoad(path: String, backend: LlmInference.Backend): Boolean {
+    /** Одна попытка загрузки. backend=null → не задаём preferredBackend (дефолт MediaPipe). */
+    private fun tryLoad(path: String, backend: LlmInference.Backend?): Boolean {
         return try {
-            val opts = LlmInferenceOptions.builder()
+            val b = LlmInferenceOptions.builder()
                 .setModelPath(path)
                 .setMaxTokens(if (lowResource) 320 else 512)
-                .setPreferredBackend(backend)
-                .build()
-            llm = LlmInference.createFromOptions(appContext, opts)
+            if (backend != null) b.setPreferredBackend(backend)
+            llm = LlmInference.createFromOptions(appContext, b.build())
             true
         } catch (e: Throwable) {
             val f = File(path)
             val mb = if (f.exists()) f.length() / (1024 * 1024) else 0L
             val isZip = runCatching {
                 f.inputStream().use { ins ->
-                    val b = ByteArray(2); ins.read(b)
-                    b[0] == 0x50.toByte() && b[1] == 0x4B.toByte() // сигнатура zip "PK"
+                    val bb = ByteArray(2); ins.read(bb)
+                    bb[0] == 0x50.toByte() && bb[1] == 0x4B.toByte() // сигнатура zip "PK"
                 }
             }.getOrDefault(false)
-            val bk = if (backend == LlmInference.Backend.GPU) "GPU" else "CPU"
+            val bk = when (backend) { LlmInference.Backend.GPU -> "GPU"; LlmInference.Backend.CPU -> "CPU"; else -> "по умолчанию" }
             loadError = "[$bk] ${e.message ?: e.javaClass.simpleName} | файл: ${f.name}, ${mb} МБ, бандл(zip): ${if (isZip) "да" else "НЕТ — несовместимый формат"}"
-            Logger.log("AI", "Загрузка на $bk не удалась: ${e.message ?: e.javaClass.simpleName}")
+            Logger.log("AI", "Загрузка ($bk) не удалась: ${e.message ?: e.javaClass.simpleName}")
             false
         }
     }

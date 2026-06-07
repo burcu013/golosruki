@@ -136,6 +136,27 @@ object LocalAi {
     }
 
     /**
+     * Срез повтора подстроки без границ слов: «order)order)order)…», «abcabcabc…».
+     * Ищем кусок длиной 3–16 символов, повторяющийся ≥4 раз подряд, и обрезаем в его начале.
+     */
+    private fun stripCharLoop(t: String): String {
+        if (t.length < 24) return t
+        for (len in 3..16) {
+            var i = 0
+            while (i + len * 4 <= t.length) {
+                val seg = t.substring(i, i + len)
+                if (seg.isNotBlank()) {
+                    var reps = 1; var j = i + len
+                    while (j + len <= t.length && t.regionMatches(j, seg, 0, len)) { reps++; j += len }
+                    if (reps >= 4) return t.substring(0, i).trim()
+                }
+                i++
+            }
+        }
+        return t
+    }
+
+    /**
      * Срез зацикленных повторов — болезнь слабых моделей: «с натяжкой с натяжкой…»,
      * «слягальщик слягальщик…», «с помощью сбора данных…» по кругу. Ищем самое раннее место,
      * где блок из 1–6 слов повторяется ≥3 раз подряд, и обрезаем вывод там (оставляем «здоровый» префикс).
@@ -191,7 +212,7 @@ object LocalAi {
         }
         t = t.replace("<end_of_turn>", " ").replace("<start_of_turn>", " ").trim()
         // Срез зацикленных повторов (до дедупликации предложений).
-        val stripped = stripRepetition(t)
+        val stripped = stripRepetition(stripCharLoop(t))
         val wasCut = stripped.length < t.length
         t = stripped
         // Схлопываем подряд идущие одинаковые предложения.

@@ -86,7 +86,7 @@ class ModelsActivity : ComponentActivity() {
         // Бэкенд ускорения
         val bc = UiKit.card(this)
         bc.addView(UiKit.sectionHeader(this, "Ускорение (движок)"))
-        bc.addView(UiKit.body(this, "На чём считать модель. «Авто» — пробует GPU, при сбое откатывается на CPU. GPU обычно быстрее, но дольше первая загрузка и выше нагрев/расход батареи. Какой бэкенд реально поднялся — видно в логах."))
+        bc.addView(UiKit.body(this, "«Авто» (рекомендуется) — проверенный движок по умолчанию. GPU бывает быстрее, но на части моделей выдаёт мусор в ответах (и при этом не падает) — если включили GPU и ответы стали бессвязными, верните «Авто» или «CPU». Какой бэкенд поднялся — видно в логах."))
         bkAuto = UiKit.iconButton(this, "Авто") { applyBackend("auto") }
         bkGpu = UiKit.iconButton(this, "GPU") { applyBackend("gpu") }
         bkCpu = UiKit.iconButton(this, "CPU") { applyBackend("cpu") }
@@ -183,9 +183,9 @@ class ModelsActivity : ComponentActivity() {
         LocalAi.engine.unload()   // переподнимется на выбранном бэкенде при следующем запросе
         styleBackend()
         status.text = when (mode) {
-            "gpu" -> "Ускорение: только GPU (первый ответ — с задержкой загрузки)."
+            "gpu" -> "Ускорение: GPU. Если ответы стали бессвязными — верните «Авто»."
             "cpu" -> "Ускорение: только CPU."
-            else -> "Ускорение: Авто (GPU, при сбое — CPU)."
+            else -> "Ускорение: Авто (проверенный движок по умолчанию)."
         }
     }
 

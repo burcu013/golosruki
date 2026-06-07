@@ -224,16 +224,59 @@ class VoiceAccessibilityService : AccessibilityService() {
         return false
     }
 
+    /** Точка кнопки записи: по описанию → самая правая небольшая кнопка внизу → null. */
+    private fun findRecordButtonPoint(): Pair<android.graphics.PointF, String>? {
+        val root = rootInActiveWindow ?: return null
+        val (w, h) = screenSize()
+        findNodeByKeywords(recordKeys, false, true)?.let { n ->
+            nodeCenter(n)?.let { return it to "по описанию" }
+        }
+        val cands = ArrayList<Rect>()
+        fun walk(n: AccessibilityNodeInfo?) {
+            if (n == null) return
+            if (n.isVisibleToUser && (n.isClickable || n.isLongClickable)) {
+                val r = Rect(); n.getBoundsInScreen(r)
+                if (r.width() in 1 until (w * 0.35f).toInt() && r.exactCenterY() > h * 0.80f) cands.add(r)
+            }
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(root)
+        val best = cands.maxByOrNull { it.exactCenterX() }
+        return best?.let { android.graphics.PointF(it.exactCenterX(), it.exactCenterY()) to "правая нижняя кнопка" }
+    }
+
+    /** Диагностика: пишем в лог нижние интерактивные узлы (помогает понять раскладку конкретного мессенджера). */
+    private fun logBottomInteractive() {
+        val root = rootInActiveWindow ?: return
+        val (_, h) = screenSize()
+        var count = 0
+        fun walk(n: AccessibilityNodeInfo?) {
+            if (n == null || count >= 8) return
+            if (n.isVisibleToUser && (n.isClickable || n.isLongClickable)) {
+                val r = Rect(); n.getBoundsInScreen(r)
+                if (r.exactCenterY() > h * 0.78f) {
+                    val d = (n.contentDescription ?: n.text ?: "").toString().take(24)
+                    Logger.log("ACC", "низ: «$d» [${r.centerX()},${r.centerY()}] click=${n.isClickable} long=${n.isLongClickable}")
+                    count++
+                }
+            }
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(root)
+    }
+
     private fun recordVoice(number: Int) {
         val (w, h) = screenSize()
+        logBottomInteractive()
         val explicit = if (number > 0) targets[number]?.let { android.graphics.PointF(it.centerX().toFloat(), it.centerY().toFloat()) } else null
-        val byNode = if (explicit == null) findNodeByKeywords(recordKeys, false, true)?.let { nodeCenter(it) } else null
-        val p = explicit ?: byNode ?: android.graphics.PointF(w * 0.92f, h * 0.92f)   // запасной вариант: справа снизу
+        val found = if (explicit == null) findRecordButtonPoint() else null
+        val p = explicit ?: found?.first ?: android.graphics.PointF(w * 0.92f, h * 0.92f)
+        val how = when { explicit != null -> "по номеру"; found != null -> found.second; else -> "запасная координата" }
         lastRecordPoint = p
         val path = Path().apply { moveTo(p.x, p.y); lineTo(p.x, (p.y - h * 0.20f).coerceAtLeast(h * 0.18f)) }
         gesture(path, 600)
         VoiceRecognitionService.instance?.setRecordingVoice(true)
-        Logger.log("ACC", "Запись голосового${if (byNode != null) " (кнопка найдена по описанию)" else ""}: ${p.x.toInt()},${p.y.toInt()}")
+        Logger.log("ACC", "Запись голосового ($how): ${p.x.toInt()},${p.y.toInt()}")
         showStatus("🎙 Запись — скажите «${cap()} отправь» или «${cap()} отмена»")
     }
     private fun recordSend() {

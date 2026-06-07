@@ -51,14 +51,32 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
         if (llm != null) return true
         val path = currentPath()
         if (!modelInstalledAt(path)) { loadError = "файл модели не найден"; return false }
+        val pref = SettingsStore.getAiBackend(appContext)
+        // Порядок попыток: gpu→только GPU, cpu→только CPU, auto→GPU, затем откат на CPU.
+        val order = when (pref) {
+            "gpu" -> listOf(LlmInference.Backend.GPU)
+            "cpu" -> listOf(LlmInference.Backend.CPU)
+            else -> listOf(LlmInference.Backend.GPU, LlmInference.Backend.CPU)
+        }
+        for (backend in order) {
+            if (tryLoad(path, backend)) {
+                loadedPath = path; loadError = null
+                Logger.log("AI", "Модель загружена на ${if (backend == LlmInference.Backend.GPU) "GPU" else "CPU"} (режим: $pref)")
+                return true
+            }
+        }
+        return false
+    }
+
+    /** Одна попытка загрузки на конкретном бэкенде. Ошибку запоминаем в loadError. */
+    private fun tryLoad(path: String, backend: LlmInference.Backend): Boolean {
         return try {
             val opts = LlmInferenceOptions.builder()
                 .setModelPath(path)
                 .setMaxTokens(if (lowResource) 320 else 512)
+                .setPreferredBackend(backend)
                 .build()
             llm = LlmInference.createFromOptions(appContext, opts)
-            loadedPath = path
-            loadError = null
             true
         } catch (e: Throwable) {
             val f = File(path)
@@ -69,7 +87,9 @@ class MediaPipeEngine(private val appContext: Context) : AiEngine {
                     b[0] == 0x50.toByte() && b[1] == 0x4B.toByte() // сигнатура zip "PK"
                 }
             }.getOrDefault(false)
-            loadError = "${e.message ?: e.javaClass.simpleName} | файл: ${f.name}, ${mb} МБ, бандл(zip): ${if (isZip) "да" else "НЕТ — несовместимый формат"}"
+            val bk = if (backend == LlmInference.Backend.GPU) "GPU" else "CPU"
+            loadError = "[$bk] ${e.message ?: e.javaClass.simpleName} | файл: ${f.name}, ${mb} МБ, бандл(zip): ${if (isZip) "да" else "НЕТ — несовместимый формат"}"
+            Logger.log("AI", "Загрузка на $bk не удалась: ${e.message ?: e.javaClass.simpleName}")
             false
         }
     }

@@ -55,6 +55,9 @@ class ModelsActivity : ComponentActivity() {
     private lateinit var modeAuto: Button
     private lateinit var modeSimple: Button
     private lateinit var modeSmart: Button
+    private lateinit var bkAuto: Button
+    private lateinit var bkGpu: Button
+    private lateinit var bkCpu: Button
     private lateinit var slotSmartView: TextView
     private lateinit var slotSimpleView: TextView
 
@@ -79,6 +82,16 @@ class ModelsActivity : ComponentActivity() {
         modeSmart = UiKit.iconButton(this, "Только умная") { applyMode("smart") }
         mc.addView(modeAuto); mc.addView(modeSimple); mc.addView(modeSmart)
         col.addView(mc)
+
+        // Бэкенд ускорения
+        val bc = UiKit.card(this)
+        bc.addView(UiKit.sectionHeader(this, "Ускорение (движок)"))
+        bc.addView(UiKit.body(this, "На чём считать модель. «Авто» — пробует GPU, при сбое откатывается на CPU. GPU обычно быстрее, но дольше первая загрузка и выше нагрев/расход батареи. Какой бэкенд реально поднялся — видно в логах."))
+        bkAuto = UiKit.iconButton(this, "Авто") { applyBackend("auto") }
+        bkGpu = UiKit.iconButton(this, "GPU") { applyBackend("gpu") }
+        bkCpu = UiKit.iconButton(this, "CPU") { applyBackend("cpu") }
+        bc.addView(bkAuto); bc.addView(bkGpu); bc.addView(bkCpu)
+        col.addView(bc)
 
         // Текущие слоты
         val sc = UiKit.card(this)
@@ -165,6 +178,27 @@ class ModelsActivity : ComponentActivity() {
         runCatching { unregisterReceiver(dlReceiver) }
     }
 
+    private fun applyBackend(mode: String) {
+        SettingsStore.setAiBackend(this, mode)
+        LocalAi.engine.unload()   // переподнимется на выбранном бэкенде при следующем запросе
+        styleBackend()
+        status.text = when (mode) {
+            "gpu" -> "Ускорение: только GPU (первый ответ — с задержкой загрузки)."
+            "cpu" -> "Ускорение: только CPU."
+            else -> "Ускорение: Авто (GPU, при сбое — CPU)."
+        }
+    }
+
+    private fun styleBackend() {
+        val b = SettingsStore.getAiBackend(this)
+        bkAuto.setBackgroundResource(if (b == "auto") R.drawable.btn_primary else R.drawable.btn_amber)
+        bkGpu.setBackgroundResource(if (b == "gpu") R.drawable.btn_primary else R.drawable.btn_amber)
+        bkCpu.setBackgroundResource(if (b == "cpu") R.drawable.btn_primary else R.drawable.btn_amber)
+        bkAuto.text = (if (b == "auto") "✓ " else "") + "Авто"
+        bkGpu.text = (if (b == "gpu") "✓ " else "") + "GPU"
+        bkCpu.text = (if (b == "cpu") "✓ " else "") + "CPU"
+    }
+
     private fun applyMode(mode: String) {
         SettingsStore.setAiRouteMode(this, mode)
         styleMode()
@@ -214,6 +248,7 @@ class ModelsActivity : ComponentActivity() {
         slotSmartView.text = "🧠 Умная: " + if (smartOk) "${File(smart).name} ✅" else "не выбрана ❌"
         slotSimpleView.text = "⚡ Простая: " + if (simpleOk) "${File(simple).name} ✅" else "не выбрана ❌"
         styleMode()
+        styleBackend()
 
         val parts = ArrayList<String>()
         if (smartOk) parts.add("умная")

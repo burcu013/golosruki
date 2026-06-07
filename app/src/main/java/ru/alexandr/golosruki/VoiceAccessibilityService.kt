@@ -186,29 +186,80 @@ class VoiceAccessibilityService : AccessibilityService() {
     }
 
     private var lastRecordPoint: android.graphics.PointF? = null
+
+    // Ключевые слова для поиска кнопок по тексту/описанию (text + contentDescription).
+    private val recordKeys = listOf("запис", "голосов", "микрофон", "voice", "record", "видеосообщ", "video mess", "audio mess")
+    private val sendKeys = listOf("отправ", "send")
+    private val cancelKeys = listOf("отмен", "удалить", "delete", "cancel", "discard", "корзин", "trash")
+
+    /** Поиск видимого узла по ключевым словам. bottomOnly — только нижняя часть экрана (там живут кнопки записи/отправки). */
+    private fun findNodeByKeywords(keys: List<String>, mustClick: Boolean, bottomOnly: Boolean): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        val (_, h) = screenSize()
+        var best: AccessibilityNodeInfo? = null
+        fun walk(n: AccessibilityNodeInfo?) {
+            if (n == null || best != null) return
+            val t = ((n.text?.toString() ?: "") + " " + (n.contentDescription?.toString() ?: "")).lowercase()
+            if (t.isNotBlank() && keys.any { t.contains(it) } && n.isVisibleToUser &&
+                (!mustClick || clickableAncestor(n) != null)) {
+                val r = android.graphics.Rect(); n.getBoundsInScreen(r)
+                if (!bottomOnly || r.exactCenterY() > h * 0.62f) { best = n; return }
+            }
+            for (i in 0 until n.childCount) { walk(n.getChild(i)); if (best != null) return }
+        }
+        walk(root)
+        return best
+    }
+
+    private fun nodeCenter(node: AccessibilityNodeInfo): android.graphics.PointF? {
+        val r = android.graphics.Rect(); node.getBoundsInScreen(r)
+        return if (r.width() > 0 && r.height() > 0) android.graphics.PointF(r.exactCenterX(), r.exactCenterY()) else null
+    }
+
+    private fun tapNode(node: AccessibilityNodeInfo): Boolean {
+        val c = clickableAncestor(node) ?: node
+        if (c.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+        val r = android.graphics.Rect(); c.getBoundsInScreen(r)
+        if (r.width() > 0) { doTap(r.exactCenterX(), r.exactCenterY(), TapKind.SINGLE); return true }
+        return false
+    }
+
     private fun recordVoice(number: Int) {
         val (w, h) = screenSize()
-        val pt = if (number > 0) targets[number]?.let { android.graphics.PointF(it.centerX().toFloat(), it.centerY().toFloat()) } else null
-        val p = pt ?: android.graphics.PointF(w * 0.92f, h * 0.92f)   // микрофон обычно справа снизу
+        val explicit = if (number > 0) targets[number]?.let { android.graphics.PointF(it.centerX().toFloat(), it.centerY().toFloat()) } else null
+        val byNode = if (explicit == null) findNodeByKeywords(recordKeys, false, true)?.let { nodeCenter(it) } else null
+        val p = explicit ?: byNode ?: android.graphics.PointF(w * 0.92f, h * 0.92f)   // запасной вариант: справа снизу
         lastRecordPoint = p
         val path = Path().apply { moveTo(p.x, p.y); lineTo(p.x, (p.y - h * 0.20f).coerceAtLeast(h * 0.18f)) }
         gesture(path, 600)
         VoiceRecognitionService.instance?.setRecordingVoice(true)
+        Logger.log("ACC", "Запись голосового${if (byNode != null) " (кнопка найдена по описанию)" else ""}: ${p.x.toInt()},${p.y.toInt()}")
         showStatus("🎙 Запись — скажите «${cap()} отправь» или «${cap()} отмена»")
-        VoiceRecognitionService.instance?.speak("Записываю. Скажите Иван отправь, когда закончите")
     }
     private fun recordSend() {
-        val (w, h) = screenSize()
-        val p = lastRecordPoint ?: android.graphics.PointF(w * 0.92f, h * 0.92f)
         VoiceRecognitionService.instance?.setRecordingVoice(false)
-        doTap(p.x, p.y, TapKind.SINGLE)
+        val node = findNodeByKeywords(sendKeys, true, true)
+        if (node != null && tapNode(node)) {
+            Logger.log("ACC", "Голосовое отправлено (кнопка «отправить»)")
+        } else {
+            val (w, h) = screenSize()
+            val p = lastRecordPoint ?: android.graphics.PointF(w * 0.92f, h * 0.92f)
+            doTap(p.x, p.y, TapKind.SINGLE)
+            Logger.log("ACC", "Голосовое отправлено (тап по точке записи)")
+        }
         lastRecordPoint = null
         showStatus("Голосовое отправлено")
     }
     private fun recordCancel() {
         VoiceRecognitionService.instance?.setRecordingVoice(false)
         lastRecordPoint = null
-        performGlobalAction(GLOBAL_ACTION_BACK)
+        val node = findNodeByKeywords(cancelKeys, true, true)
+        if (node != null && tapNode(node)) {
+            Logger.log("ACC", "Запись голосового отменена (кнопка)")
+        } else {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            Logger.log("ACC", "Запись голосового отменена (Назад)")
+        }
         showStatus("Запись голосового отменена")
     }
     private fun cap(): String = VoiceRecognitionService.instance?.wakeWordPublic()

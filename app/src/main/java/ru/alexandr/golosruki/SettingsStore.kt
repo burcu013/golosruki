@@ -138,6 +138,10 @@ object SettingsStore {
     // Режим маршрутизации: "auto" | "simple" | "smart".
     fun getAiRouteMode(ctx: Context): String = p(ctx).getString("ai_route_mode", "auto") ?: "auto"
     fun setAiRouteMode(ctx: Context, v: String) = p(ctx).edit().putString("ai_route_mode", v).apply()
+
+    // Бэкенд ускорения ИИ: "auto" (GPU с откатом на CPU), "gpu", "cpu".
+    fun getAiBackend(ctx: Context): String = p(ctx).getString("ai_backend", "auto") ?: "auto"
+    fun setAiBackend(ctx: Context, v: String) = p(ctx).edit().putString("ai_backend", v).apply()
     // Токен HuggingFace для скачивания закрытых моделей (Gemma)
     fun getHfToken(ctx: Context): String = p(ctx).getString("hf_token", "") ?: ""
     fun setHfToken(ctx: Context, v: String) = p(ctx).edit().putString("hf_token", v.trim()).apply()

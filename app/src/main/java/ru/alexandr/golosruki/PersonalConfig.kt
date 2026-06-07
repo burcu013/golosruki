@@ -10,6 +10,7 @@ data class PersonalConfig(
     val sosNumber: String,
     val sosText: String,
     val customApps: Map<String, String> = emptyMap(),  // своя фраза -> package
+    val customGestures: Map<String, String> = emptyMap(),  // своё слово -> JSON жеста
     val sosPin: String = ""               // подтверждение для SOS
 ) {
     companion object {
@@ -21,8 +22,9 @@ data class PersonalConfig(
             val sosNum = SettingsStore.getSosNumber(context).ifBlank { asset.sosNumber }
             val sosTxt = SettingsStore.getSosText(context).ifBlank { asset.sosText }
             val customApps = SettingsStore.getOpenCommands(context)
+            val customGestures = GestureStore.getCustomGestures(context)
             val sosPin = SettingsStore.getSosPin(context).lowercase().trim()
-            return PersonalConfig(contacts, asset.apps, sosNum, sosTxt, customApps, sosPin)
+            return PersonalConfig(contacts, asset.apps, sosNum, sosTxt, customApps, customGestures, sosPin)
         }
 
         private fun loadAsset(context: Context): PersonalConfig {

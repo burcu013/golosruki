@@ -240,6 +240,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var ttsVoiceName = ""
     private var confirmCalls = false
     private var pendingCall: Pair<String, String>? = null   // имя -> номер (ожидает «да»)
+    private var pendingGestureCalib = false                  // ожидает подтверждения записи жеста
 
     private val idleRunnable = Runnable {
         if (aiListening) { aiListening = false; restartListening() }   // заброшенный ИИ-запрос — сброс
@@ -1005,6 +1006,25 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 else -> { pendingCall = null }  // иначе сбрасываем и обрабатываем как обычную команду
             }
         }
+        // Ожидание подтверждения записи жеста (защита от случайного запуска холста)
+        if (pendingGestureCalib) {
+            when {
+                text.contains("да") || text.contains("подтвержда") || text.contains("начинай") ||
+                    text.contains("записывай") || text.contains("давай") -> {
+                    pendingGestureCalib = false
+                    Logger.log("CMD", "Калибровка жеста подтверждена")
+                    post { VoiceAccessibilityService.instance?.execute(Command.CalibrateRecordGesture) }
+                    return
+                }
+                text.contains("нет") || text.contains("отмена") || text.contains("стоп") || text.contains("не надо") -> {
+                    pendingGestureCalib = false
+                    speak("Отменено")
+                    VoiceAccessibilityService.instance?.showStatus("Калибровка жеста отменена")
+                    return
+                }
+                else -> { pendingGestureCalib = false }  // иначе сбрасываем и обрабатываем как обычную команду
+            }
+        }
         if (text.contains("повтори")) {
             lastCmdText?.let { last ->
                 Logger.log("CMD", "Повтор: $last")
@@ -1055,6 +1075,15 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             VoiceAccessibilityService.instance?.showStatus("Звоню ${cmd.name}? Скажите «да» или «нет»")
             speak("Звоню ${cmd.name}? Скажите да или нет")
             handler.postDelayed({ if (pendingCall != null) { pendingCall = null; Logger.log("CMD", "Подтверждение истекло") } }, 15000)
+            return
+        }
+
+        // Калибровка жеста — только после подтверждения (защита от случайного открытия холста)
+        if (cmd is Command.CalibrateRecordGesture) {
+            pendingGestureCalib = true
+            VoiceAccessibilityService.instance?.showStatus("Записать жест? Скажите «да» — начать, «отмена» — выйти")
+            speak("Записать жест? Скажите да чтобы начать, или отмена")
+            handler.postDelayed({ if (pendingGestureCalib) { pendingGestureCalib = false; Logger.log("CMD", "Калибровка жеста: подтверждение истекло") } }, 12000)
             return
         }
 

@@ -65,6 +65,13 @@ object CommandParser {
             if (phrase.length >= 4 && t.split(" ").any { it.length >= 4 && levenshtein(it, phrase) <= 2 })
                 return Command.OpenApp(phrase, pkg)
         }
+        // 0.36 Кастомные жесты (своё слово -> записанный жест)
+        for ((phrase, json) in personal.customGestures) {
+            if (phrase.isBlank() || json.isBlank()) continue
+            if (t == phrase || t.contains(phrase)) return Command.CustomGesture(phrase, json)
+            if (phrase.length >= 4 && t.split(" ").any { it.length >= 4 && levenshtein(it, phrase) <= 2 })
+                return Command.CustomGesture(phrase, json)
+        }
         // 0.4 Персональные: открыть приложение
         if (t.contains("открой") || t.contains("запусти")) {
             for ((name, pkg) in personal.apps) {
@@ -120,6 +127,9 @@ object CommandParser {
             t.contains("ввод") || t.contains("отправ") || t.contains("энтер") -> return Command.EnterKey
             t.contains("вставь") || t.contains("вставить") -> return Command.Paste
             t.contains("копир") -> return Command.CopyText
+            // Калибровка: «жест» → запись жеста; иначе — точка кнопки (раньше «голосового»: «записи» содержит «запис»)
+            t.contains("калибров") && t.contains("жест") -> return Command.CalibrateRecordGesture
+            t.contains("калибров") || (t.contains("запомни") && t.contains("кнопк")) -> return Command.CalibrateRecord
             // Голосовое сообщение: «запиши голосовое [N]» / «голосовое [N]» — зажать микрофон и заблокировать
             t.contains("голосов") || (t.contains("запиш") && !t.contains("экран")) -> {
                 val n = extractNumber(t) ?: 0

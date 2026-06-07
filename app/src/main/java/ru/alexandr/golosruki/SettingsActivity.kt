@@ -268,6 +268,15 @@ class SettingsActivity : ComponentActivity() {
         oc.addView(UiKit.button(this, "➕ Добавить команду") { addOpenRow("", "") })
         col.addView(oc)
 
+        // Кастомные жесты
+        val gc = UiKit.card(this)
+        gc.addView(UiKit.sectionHeader(this, "Кастомные жесты"))
+        gc.addView(UiKit.body(this, "Своё слово → жест, записанный пальцем с экрана. Вызов: «Иван <слово>». До 20 жестов."))
+        gc.addView(UiKit.button(this, "✍️ Открыть кастомные жесты") {
+            startActivity(android.content.Intent(this, CustomGesturesActivity::class.java))
+        })
+        col.addView(gc)
+
         // --- Клавиатура ГолосРуки (IME) ---
         val kbc = UiKit.card(this)
         kbc.addView(UiKit.sectionHeader(this, "⌨️ Диктовка везде"))

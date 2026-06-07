@@ -17,6 +17,7 @@ import android.telephony.SmsManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.WindowManager
 
 /** Выполняет команды: навигация, нажатия, свайпы, ввод, SOS, разблокировка, запуск приложений. */
 class VoiceAccessibilityService : AccessibilityService() {
@@ -135,6 +136,9 @@ class VoiceAccessibilityService : AccessibilityService() {
             is Command.RecordVoice -> recordVoice(command.number)
             Command.RecordSend -> recordSend()
             Command.RecordCancel -> recordCancel()
+            Command.CalibrateRecord -> startRecordCalibration()
+            Command.CalibrateRecordGesture -> startRecordGestureCalibration()
+            is Command.CustomGesture -> { if (!playGesture(command.json)) showStatus("Жест не выполнен") }
             Command.MediaPause -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
             Command.MediaPlay -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PLAY)
             Command.MediaNext -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_NEXT)
@@ -142,7 +146,7 @@ class VoiceAccessibilityService : AccessibilityService() {
             is Command.Swipe -> doScroll(command.direction, command.fine)
             Command.ShowNumbers -> showNumbers()
             Command.Grid -> showGrid()
-            Command.HideOverlay -> { mode = Mode.NONE; targets.clear(); overlay.clearTargets() }
+            Command.HideOverlay -> { recordCalibration = false; mode = Mode.NONE; targets.clear(); overlay.clearTargets() }
             is Command.Tap -> onTap(command.number, TapKind.SINGLE)
             is Command.LongPress -> onTap(command.number, TapKind.LONG)
             is Command.DoubleTap -> onTap(command.number, TapKind.DOUBLE)
@@ -186,11 +190,22 @@ class VoiceAccessibilityService : AccessibilityService() {
     }
 
     private var lastRecordPoint: android.graphics.PointF? = null
+    @Volatile private var recordCalibration = false   // идёт калибровка кнопки записи (выбор номера)
 
-    // Голосовая кнопка — ТОЛЬКО голос (видео исключаем намеренно: в Telegram/VK рядом есть видеосообщение).
-    private val voiceKeys = listOf("голосов", "voice", "audio mess", "звуков")
+    private fun currentPkg(): String = rootInActiveWindow?.packageName?.toString() ?: ""
+
+    private fun startRecordCalibration() {
+        recordCalibration = true
+        showNumbers()
+        showStatus("Калибровка записи: назовите номер кнопки микрофона")
+        VoiceRecognitionService.instance?.speak("Назовите номер кнопки записи")
+    }
+
+    // Голосовая кнопка — ТОЛЬКО голос. Видео исключаем отдельной проверкой (не через avoid).
+    private val voiceKeys = listOf("голосов", "voice")
+    // avoid — ТОЛЬКО для запасного подбора «правой нижней кнопки» (не для поиска голосовой!).
     private val avoidKeys = listOf("видео", "video", "эмодзи", "emoji", "стикер", "sticker", "gif",
-        "прикреп", "вложени", "медиа", "attach", "камер", "camera", "сообщени", "message", "поиск", "search")
+        "прикреп", "вложени", "медиа", "attach", "камер", "camera", "расшифров", "transcript", "поиск", "search")
     private val sendKeys = listOf("отправ", "send")
     private val cancelKeys = listOf("отмен", "удалить", "delete", "cancel", "discard", "корзин", "trash")
 
@@ -226,22 +241,29 @@ class VoiceAccessibilityService : AccessibilityService() {
         return false
     }
 
-    /** Точка голосовой кнопки: по описанию (только голос, не видео) → правая нижняя кнопка → null. */
+    /** Точка голосовой кнопки: по описанию (голос, не видео) → правая нижняя кнопка → координата у поля ввода. */
     private fun findRecordButtonPoint(): Pair<android.graphics.PointF, String>? {
         val root = rootInActiveWindow ?: return null
         val (w, h) = screenSize()
         var voice: android.graphics.PointF? = null
+        var inputY: Float? = null
         val fallback = ArrayList<Rect>()
         fun walk(n: AccessibilityNodeInfo?) {
             if (n == null) return
             if (n.isVisibleToUser) {
                 val d = ((n.contentDescription ?: n.text ?: "").toString()).lowercase()
                 val r = Rect(); n.getBoundsInScreen(r)
-                val avoid = avoidKeys.any { d.contains(it) }
-                if (voice == null && d.isNotBlank() && !avoid && voiceKeys.any { d.contains(it) } &&
-                    r.width() > 0 && r.height() > 0) {
+                // Голосовая кнопка: содержит «голосов/voice» и НЕ видео. avoid здесь НЕ применяем
+                // (иначе «голосовое сообщение» отсеклось бы по слову «сообщение»).
+                if (voice == null && d.isNotBlank() && !d.contains("видео") && !d.contains("video") &&
+                    voiceKeys.any { d.contains(it) } && r.width() > 0 && r.height() > 0) {
                     voice = android.graphics.PointF(r.exactCenterX(), r.exactCenterY())
                 }
+                // Поле ввода — чтобы знать Y строки ввода для запасной координаты.
+                if (inputY == null && (d.contains("сообщени") || d.contains("message")) && r.height() > 0) {
+                    inputY = r.exactCenterY()
+                }
+                val avoid = avoidKeys.any { d.contains(it) } || d.contains("сообщени") || d.contains("message")
                 if ((n.isClickable || n.isLongClickable) && !avoid &&
                     r.exactCenterY() > h * 0.75f && r.width() in 1 until (w * 0.45f).toInt()) {
                     fallback.add(r)
@@ -251,8 +273,12 @@ class VoiceAccessibilityService : AccessibilityService() {
         }
         walk(root)
         voice?.let { return it to "голосовая кнопка" }
-        return fallback.maxByOrNull { it.exactCenterX() }
-            ?.let { android.graphics.PointF(it.exactCenterX(), it.exactCenterY()) to "правая нижняя кнопка" }
+        fallback.maxByOrNull { it.exactCenterX() }?.let {
+            return android.graphics.PointF(it.exactCenterX(), it.exactCenterY()) to "правая нижняя кнопка"
+        }
+        // Запасная координата: правый край строки ввода (там обычно микрофон), иначе самый низ-право.
+        val y = inputY ?: (h * 0.95f)
+        return android.graphics.PointF(w * 0.93f, y) to "координата у поля ввода"
     }
 
     /** Диагностика: пишем в лог нижние интерактивные узлы (помогает понять раскладку конкретного мессенджера). */
@@ -277,11 +303,23 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     private fun recordVoice(number: Int) {
         val (w, h) = screenSize()
+        val pkg = currentPkg()
+        // Если для приложения записан жест калибровки — воспроизводим его (самый надёжный путь).
+        if (number <= 0) {
+            val ges = GestureStore.getRecGesture(this, pkg)
+            if (ges != null && playGesture(ges)) {
+                VoiceRecognitionService.instance?.setRecordingVoice(true)
+                Logger.log("ACC", "Запись голосового (жест калибровки) для $pkg")
+                showStatus("🎙 Запись — скажите «${cap()} отправь» или «${cap()} отмена»")
+                return
+            }
+        }
         logBottomInteractive()
         val explicit = if (number > 0) targets[number]?.let { android.graphics.PointF(it.centerX().toFloat(), it.centerY().toFloat()) } else null
-        val found = if (explicit == null) findRecordButtonPoint() else null
-        val p = explicit ?: found?.first ?: android.graphics.PointF(w * 0.92f, h * 0.92f)
-        val how = when { explicit != null -> "по номеру"; found != null -> found.second; else -> "запасная координата" }
+        val calib = if (explicit == null) SettingsStore.getRecPointFrac(this, pkg)?.let { android.graphics.PointF(it.first * w, it.second * h) } else null
+        val found = if (explicit == null && calib == null) findRecordButtonPoint() else null
+        val p = explicit ?: calib ?: found?.first ?: android.graphics.PointF(w * 0.92f, h * 0.92f)
+        val how = when { explicit != null -> "по номеру"; calib != null -> "калибровка"; found != null -> found.second; else -> "запасная координата" }
         lastRecordPoint = p
         val path = Path().apply { moveTo(p.x, p.y); lineTo(p.x, (p.y - h * 0.20f).coerceAtLeast(h * 0.18f)) }
         gesture(path, 600)
@@ -434,6 +472,18 @@ class VoiceAccessibilityService : AccessibilityService() {
     private enum class TapKind { SINGLE, LONG, DOUBLE }
 
     private fun onTap(number: Int, kind: TapKind) {
+        if (recordCalibration) {
+            val r = targets[number] ?: run { showStatus("Нет цели $number — повторите номер"); return }
+            val (w, h) = screenSize()
+            val pkg = currentPkg()
+            SettingsStore.setRecPointFrac(this, pkg, r.exactCenterX() / w, r.exactCenterY() / h)
+            recordCalibration = false
+            mode = Mode.NONE; targets.clear(); overlay.clearTargets()
+            Logger.log("ACC", "Калибровка записи: $pkg → ${r.centerX()},${r.centerY()} (доли ${"%.3f".format(r.exactCenterX()/w)},${"%.3f".format(r.exactCenterY()/h)})")
+            showStatus("Кнопка записи запомнена для этого приложения ✅")
+            VoiceRecognitionService.instance?.speak("Кнопка записи запомнена")
+            return
+        }
         when (mode) {
             Mode.GRID1 -> {
                 val cell = targets[number] ?: run { showStatus("Нет ячейки $number"); return }
@@ -562,6 +612,86 @@ class VoiceAccessibilityService : AccessibilityService() {
                 .addStroke(GestureDescription.StrokeDescription(path, 0, duration))
                 .build(), null, null
         )
+    }
+
+    // ===== Движок жестов: запись пальцем (оверлей) → доли → воспроизведение =====
+    private val wm by lazy { getSystemService(WINDOW_SERVICE) as WindowManager }
+    private var recorder: GestureRecorderOverlay? = null
+
+    fun startGestureRecorder(title: String, onSaved: (String) -> Unit) {
+        handler.post {
+            stopGestureRecorder()
+            @Suppress("DEPRECATION")
+            val type = if (Build.VERSION.SDK_INT >= 22)
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+            else WindowManager.LayoutParams.TYPE_SYSTEM_OVERLAY
+            val lp = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                type,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                android.graphics.PixelFormat.TRANSLUCENT
+            )
+            lp.gravity = android.view.Gravity.TOP or android.view.Gravity.START
+            val v = GestureRecorderOverlay(this, title,
+                onSave = { json -> stopGestureRecorder(); onSaved(json) },
+                onCancel = { stopGestureRecorder(); showStatus("Запись жеста отменена") })
+            runCatching { wm.addView(v, lp); recorder = v }
+        }
+    }
+
+    fun stopGestureRecorder() {
+        recorder?.let { r -> runCatching { wm.removeView(r) } }
+        recorder = null
+    }
+
+    /** Воспроизвести жест из JSON (доли экрана + тайминги). */
+    fun playGesture(json: String): Boolean {
+        val strokes = GestureStore.parse(json)
+        if (strokes.isEmpty()) return false
+        val (w, h) = screenSize()
+        val builder = GestureDescription.Builder()
+        var added = 0
+        for (st in strokes.take(10)) {
+            val pts = st.pts
+            if (pts.isEmpty()) continue
+            val x0 = pts.first().first * w; val y0 = pts.first().second * h
+            val path = Path().apply { moveTo(x0, y0) }
+            for (k in 1 until pts.size) path.lineTo(pts[k].first * w, pts[k].second * h)
+            if (pts.size == 1) path.lineTo(x0 + 1f, y0 + 1f)   // путь не может быть из одной точки
+            val start = pts.first().third.coerceAtLeast(0)
+            var dur = pts.last().third - pts.first().third
+            if (dur < 1) dur = if (pts.size <= 1) 60 else 200
+            runCatching {
+                builder.addStroke(GestureDescription.StrokeDescription(path, start, dur)); added++
+            }
+        }
+        if (added == 0) return false
+        return runCatching { dispatchGesture(builder.build(), null, null); true }.getOrDefault(false)
+    }
+
+    private fun startRecordGestureCalibration() {
+        val pkg = currentPkg()
+        if (pkg.isBlank()) { showStatus("Не вижу активное приложение"); return }
+        startGestureRecorder("Жест записи голосового") { json ->
+            GestureStore.setRecGesture(this, pkg, json)
+            Logger.log("ACC", "Жест записи сохранён для $pkg")
+            showStatus("Жест записи сохранён для этого приложения ✅")
+            VoiceRecognitionService.instance?.speak("Жест записи сохранён")
+        }
+    }
+
+    /** Запуск записи кастомного жеста из настроек (по слову). Вызывается из Activity. */
+    fun startCustomGestureRecording(word: String) {
+        startGestureRecorder("Жест для команды: $word") { json ->
+            val ok = GestureStore.saveCustomGesture(this, word, json)
+            showStatus(if (ok) "Жест «$word» сохранён ✅" else "Достигнут лимит 20 жестов")
+            if (ok) runCatching {
+                val i = Intent(this, VoiceRecognitionService::class.java).setAction(VoiceRecognitionService.ACTION_APPLY)
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+            }
+        }
     }
 
     // --- Перетаскивание: зажать элемент N и перенести на M ---

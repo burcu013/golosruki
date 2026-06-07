@@ -23,6 +23,9 @@ sealed class Command {
     data class RecordVoice(val number: Int) : Command() // голосовое: зажать микрофон + свайп вверх (блокировка)
     object RecordSend : Command()                        // отправить записанное голосовое
     object RecordCancel : Command()                      // отменить запись голосового (Назад)
+    object CalibrateRecord : Command()                   // калибровка точки кнопки записи (выбором номера)
+    object CalibrateRecordGesture : Command()            // запись жеста запуска голосового (для приложения)
+    data class CustomGesture(val name: String, val json: String) : Command()  // воспроизвести кастомный жест
     object MediaPause : Command()             // пауза воспроизведения
     object MediaPlay : Command()              // воспроизвести
     object MediaNext : Command()              // следующий трек
@@ -78,6 +81,9 @@ sealed class Command {
         is RecordVoice -> "Запись голосового" + (if (number > 0) " №$number" else "")
         RecordSend -> "Отправить голосовое"
         RecordCancel -> "Отменить голосовое"
+        CalibrateRecord -> "Калибровка кнопки записи"
+        CalibrateRecordGesture -> "Калибровка жеста записи"
+        is CustomGesture -> "Жест: $name"
         MediaPause -> "Пауза видео"
         MediaPlay -> "Воспроизвести"
         MediaNext -> "Следующий трек"

@@ -142,6 +142,18 @@ object SettingsStore {
     // Бэкенд ускорения ИИ: "auto" (GPU с откатом на CPU), "gpu", "cpu".
     fun getAiBackend(ctx: Context): String = p(ctx).getString("ai_backend", "auto") ?: "auto"
     fun setAiBackend(ctx: Context, v: String) = p(ctx).edit().putString("ai_backend", v).apply()
+
+    // Калибровка кнопки записи: доли экрана (x,y в 0..1) по пакету приложения.
+    fun getRecPointFrac(ctx: Context, pkg: String): Pair<Float, Float>? {
+        if (pkg.isBlank()) return null
+        val s = p(ctx).getString("recpt_$pkg", "") ?: ""
+        val parts = s.split(",")
+        val x = parts.getOrNull(0)?.toFloatOrNull() ?: return null
+        val y = parts.getOrNull(1)?.toFloatOrNull() ?: return null
+        return x to y
+    }
+    fun setRecPointFrac(ctx: Context, pkg: String, x: Float, y: Float) =
+        p(ctx).edit().putString("recpt_$pkg", "$x,$y").apply()
     // Токен HuggingFace для скачивания закрытых моделей (Gemma)
     fun getHfToken(ctx: Context): String = p(ctx).getString("hf_token", "") ?: ""
     fun setHfToken(ctx: Context, v: String) = p(ctx).edit().putString("hf_token", v.trim()).apply()

@@ -10,7 +10,7 @@ object Vocabulary {
         // навигация и управление
         "назад", "домой", "недавние", "шторка", "уведомления",
         "быстрые", "настройки", "заблокируй", "блокировка", "скриншот",
-        "номера", "кнопки", "сетка", "ячейка",
+        "номера", "кнопки", "сетка", "ячейка", "калибровка", "калибровку", "запомни", "кнопку", "жест", "жеста",
         "нажми", "нажать", "выбери", "долгое", "двойное", "нажатие", "удержание",
         "удали", "стереть", "сотри", "выдели", "выделить", "очисти", "очистить", "всё",
         "смахни", "свайпни", "ввод", "отправь", "энтер",
@@ -63,6 +63,7 @@ object Vocabulary {
         personal.contacts.keys.forEach { name -> name.split(" ").forEach { words.add(it) } }
         personal.apps.keys.forEach { name -> name.split(" ").forEach { words.add(it) } }
         personal.customApps.keys.forEach { phrase -> phrase.split(" ").forEach { words.add(it) } }
+        personal.customGestures.keys.forEach { phrase -> phrase.split(" ").forEach { words.add(it) } }
         personal.sosPin.split(" ").forEach { if (it.isNotBlank()) words.add(it) }
         mediaCode.split(" ").forEach { if (it.isNotBlank()) words.add(it) }
         CommandAliases.aliasWords().forEach { words.add(it) }   // персональные триггеры

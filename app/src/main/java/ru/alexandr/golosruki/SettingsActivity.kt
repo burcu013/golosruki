@@ -296,6 +296,18 @@ class SettingsActivity : ComponentActivity() {
         })
         col.addView(nc)
 
+        // Календарь
+        val cc = UiKit.card(this)
+        cc.addView(UiKit.sectionHeader(this, "Календарь"))
+        cc.addView(UiKit.body(this, "«Иван какие планы» или «Иван что сегодня» — Иван зачитает события дня. «Иван что завтра» — на завтра. Нужен доступ к календарю."))
+        cc.addView(UiKit.button(this, "📅 Дать доступ к календарю") {
+            runCatching {
+                androidx.core.app.ActivityCompat.requestPermissions(
+                    this, arrayOf(android.Manifest.permission.READ_CALENDAR), 7011)
+            }
+        })
+        col.addView(cc)
+
         // --- Клавиатура ГолосРуки (IME) ---
         val kbc = UiKit.card(this)
         kbc.addView(UiKit.sectionHeader(this, "⌨️ Диктовка везде"))

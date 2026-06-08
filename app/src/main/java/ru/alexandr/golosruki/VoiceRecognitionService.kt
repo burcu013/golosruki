@@ -1036,11 +1036,23 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 else -> { pendingGestureCalib = false }  // иначе сбрасываем и обрабатываем как обычную команду
             }
         }
-        if (text.contains("что нового") || text.contains("что новенького") ||
+        if (text.contains("нового") || text.contains("новенького") ||
             text.contains("прочитай уведомл") || text.contains("зачитай уведомл") || text.contains("какие уведомл")) {
             Logger.log("CMD", "Чтение уведомлений")
             speak(NotificationService.recentSummary(this, 5))
             return
+        }
+        run {
+            val dayWord = text.contains("сегодня") || text.contains("завтра")
+            val dateTimeQ = text.contains("числ") || text.contains("врем") || text.contains("час") ||
+                text.contains("погод") || text.contains("недел") || text.contains("дата")
+            if (text.contains("план") || text.contains("календар") || text.contains("расписани") ||
+                (dayWord && !dateTimeQ)) {
+                val off = if (text.contains("завтра")) 1 else 0
+                Logger.log("CMD", "Календарь (день +$off)")
+                speak(CalendarReader.daySummary(this, off))
+                return
+            }
         }
         if (text.contains("повтори")) {
             lastCmdText?.let { last ->

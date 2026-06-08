@@ -177,6 +177,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var dictation = false
     @Volatile private var dictationDigits = false
     @Volatile private var recordingVoice = false   // идёт запись голосового: глушим всё, кроме «Иван отправь/отмена»
+    @Volatile private var heardWakeInUtterance = false  // в текущей распознанной фразе было слово активации
 
     private val recordingOff = Runnable { recordingVoice = false; Logger.log("REC", "Запись голосового: авто-сброс по таймауту") }
     /** Включает/выключает режим записи голосового. В нём команды не парсятся — нужен явный «Иван отправь/отмена». */
@@ -779,6 +780,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         val text = normalize(raw.replace("[unk]", " "))
         if (text.isBlank()) return
         Logger.log("HEARD", "'$text' | state=$state media=$mediaControlMode dict=$dictation digits=$dictationDigits call=${inCall()} mode=${audioModeName()} tel=${telStateName()}")
+        heardWakeInUtterance = text.contains(wakeWord)   // фиксируем ДО любого вырезания «иван»
 
         // Во время озвучки: реагируем ТОЛЬКО на прерывание «Иван + хватит/стоп».
         if (isSpeaking) {
@@ -1099,12 +1101,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         Logger.log("CMD", "Команда: ${cmd.label()}")
 
         // «Только по Иван»: строгий жест — лишь если в фразе было слово активации
-        if (cmd is Command.CustomGesture && GestureStore.isStrict(cmd.json) && !text.contains(wakeWord)) {
+        if (cmd is Command.CustomGesture && GestureStore.isStrict(cmd.json) && !heardWakeInUtterance) {
             Logger.log("CMD", "Жест «${cmd.name}» только по «$wakeWord» — пропуск")
             return
         }
         // Запуск приложений — по настройке только по «Иван <слово>»
-        if (cmd is Command.OpenApp && SettingsStore.getLaunchRequireWake(this) && !text.contains(wakeWord)) {
+        if (cmd is Command.OpenApp && SettingsStore.getLaunchRequireWake(this) && !heardWakeInUtterance) {
             Logger.log("CMD", "Запуск «${cmd.name}» только по «$wakeWord» — пропуск")
             return
         }

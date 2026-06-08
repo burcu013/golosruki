@@ -54,6 +54,27 @@ class NotificationService : NotificationListenerService() {
         packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
     } catch (e: Exception) { pkg }
 
+    /** Актуальные уведомления из шторки (последние n, без постоянных/сводок/своих). */
+    fun currentActive(n: Int): List<Item> {
+        val out = ArrayList<Item>()
+        val arr = try { activeNotifications } catch (e: Exception) { null } ?: return out
+        for (sbn in arr.sortedByDescending { it.postTime }) {
+            val pkg = sbn.packageName ?: continue
+            if (pkg == packageName) continue
+            val nt = sbn.notification ?: continue
+            if (nt.flags and Notification.FLAG_ONGOING_EVENT != 0) continue
+            if (nt.flags and Notification.FLAG_GROUP_SUMMARY != 0) continue
+            val ex = nt.extras ?: continue
+            val title = ex.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim() ?: ""
+            var text = ex.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim() ?: ""
+            if (text.isBlank()) text = ex.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim() ?: ""
+            if (title.isBlank() && text.isBlank()) continue
+            out.add(Item(appLabel(pkg), title, text))
+            if (out.size >= n) break
+        }
+        return out
+    }
+
     companion object {
         @Volatile var instance: NotificationService? = null
         private val buffer = ArrayList<Item>()
@@ -67,12 +88,13 @@ class NotificationService : NotificationListenerService() {
             return flat.contains(ctx.packageName)
         }
 
-        /** Текст для зачитывания последних N уведомлений. */
+        /** Текст для зачитывания актуальных уведомлений из шторки. */
         fun recentSummary(ctx: Context, n: Int): String {
             if (!hasAccess(ctx)) return "Нет доступа к уведомлениям. Включите его в настройках приложения, раздел «Уведомления»."
-            val items = synchronized(buffer) { buffer.takeLast(n).reversed() }
+            val svc = instance
+            val items = svc?.currentActive(n) ?: synchronized(buffer) { buffer.takeLast(n).reversed() }
             if (items.isEmpty()) return "Новых уведомлений нет."
-            val sb = StringBuilder("Последние уведомления. ")
+            val sb = StringBuilder("Уведомления. ")
             for (it in items) {
                 sb.append(it.app)
                 if (it.title.isNotBlank()) { sb.append(": "); sb.append(it.title) }

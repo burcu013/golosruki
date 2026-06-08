@@ -70,12 +70,18 @@ class CustomGesturesActivity : ComponentActivity() {
             listBox.addView(UiKit.switchView(this).apply {
                 text = "Только по «Иван $word» (не в свободном режиме)"; textSize = 14f
                 isChecked = GestureStore.isStrict(json)
-                setOnCheckedChangeListener { _, v -> GestureStore.setStrict(this@CustomGesturesActivity, word, v) }
+                setOnCheckedChangeListener { _, v ->
+                    GestureStore.setStrict(this@CustomGesturesActivity, word, v)
+                    this@CustomGesturesActivity.applyGrammar()
+                }
             })
             listBox.addView(UiKit.switchView(this).apply {
                 text = "После жеста — сон (микрофон засыпает, статус «Сон», будить «Иван»)"; textSize = 14f
                 isChecked = GestureStore.isLock(json)
-                setOnCheckedChangeListener { _, v -> GestureStore.setLock(this@CustomGesturesActivity, word, v) }
+                setOnCheckedChangeListener { _, v ->
+                    GestureStore.setLock(this@CustomGesturesActivity, word, v)
+                    this@CustomGesturesActivity.applyGrammar()
+                }
             })
             listBox.addView(UiKit.iconButton(this, "🗑 Удалить «$word»", R.drawable.btn_amber) { delete(word) })
         }

@@ -58,14 +58,18 @@ object CommandParser {
             if (hit != null) return Command.CallContact(hit.first, hit.second)
             return Command.Unknown   // «позвони …» не должно превращаться в тап/свайп по числу
         }
-        // 0.35 Кастомные команды запуска (своя фраза -> приложение)
-        for ((phrase, pkg) in personal.customApps) {
-            if (pkg.isBlank() || phrase.isBlank()) continue
-            if (t.contains(phrase)) return Command.OpenApp(phrase, pkg)
-            if (phrase.length >= 4 && t.split(" ").any { it.length >= 4 && levenshtein(it, phrase) <= 2 })
-                return Command.OpenApp(phrase, pkg)
+        val wantsOpen = t.contains("откро") || t.contains("запус") || t.contains("выполн")
+        // 0.35 Кастомные команды запуска (своя фраза -> приложение) — ТОЛЬКО с глаголом «открой/запусти/выполни».
+        // Иначе слово-команда («музыку») срабатывала бы сама по себе. Теперь нужно «открой музыку» (или «Иван открой музыку»).
+        if (wantsOpen) {
+            for ((phrase, pkg) in personal.customApps) {
+                if (pkg.isBlank() || phrase.isBlank()) continue
+                if (t.contains(phrase)) return Command.OpenApp(phrase, pkg)
+                if (phrase.length >= 4 && t.split(" ").any { it.length >= 4 && levenshtein(it, phrase) <= 2 })
+                    return Command.OpenApp(phrase, pkg)
+            }
         }
-        // 0.36 Кастомные жесты (своё слово -> записанный жест)
+        // 0.36 Кастомные жесты (своё слово -> записанный жест) — по самому слову («Иван <слово>» или в свободном режиме)
         for ((phrase, json) in personal.customGestures) {
             if (phrase.isBlank() || json.isBlank()) continue
             if (t == phrase || t.contains(phrase)) return Command.CustomGesture(phrase, json)
@@ -73,7 +77,7 @@ object CommandParser {
                 return Command.CustomGesture(phrase, json)
         }
         // 0.4 Персональные: открыть приложение
-        if (t.contains("открой") || t.contains("запусти")) {
+        if (wantsOpen) {
             for ((name, pkg) in personal.apps) {
                 if (pkg.isNotBlank() && t.contains(name)) return Command.OpenApp(name, pkg)
             }

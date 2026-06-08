@@ -63,6 +63,15 @@
         <activity android:name=".SetupActivity" android:exported="false" />
         <activity android:name=".ModelsActivity" android:exported="false" />
         <activity android:name=".CustomGesturesActivity" android:exported="false" />
+        <service
+            android:name=".NotificationService"
+            android:label="ГолосРуки — уведомления"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
         <service android:name=".ModelDownloadService" android:exported="false" android:foregroundServiceType="dataSync" />
 
         <!-- Активность пробуждения/разблокировки экрана -->

@@ -46,10 +46,41 @@ object GestureStore {
         writeGestures(ctx, m)
     }
 
+    /** Жест «строгий» — срабатывает только если фраза содержала слово активации («Иван <слово>»). */
+    fun isStrict(json: String): Boolean = try { JSONObject(json).optBoolean("strict", false) } catch (e: Exception) { false }
+
+    fun setStrict(ctx: Context, word: String, strict: Boolean) {
+        val w = word.lowercase().trim()
+        val m = LinkedHashMap(getCustomGestures(ctx))
+        val j = m[w] ?: return
+        val o = try { JSONObject(j) } catch (e: Exception) { return }
+        o.put("strict", strict)
+        m[w] = o.toString()
+        writeGestures(ctx, m)
+    }
+
     private fun writeGestures(ctx: Context, m: Map<String, String>) {
         val o = JSONObject()
         for ((k, v) in m) if (k.isNotBlank() && v.isNotBlank()) o.put(k, v)
         p(ctx).edit().putString("gestures", o.toString()).apply()
+    }
+
+    /** Стрим-режим: после жеста Иван ждёт «Иван хватит/стоп» (флаг хранится в самом JSON жеста). */
+    fun isLock(json: String): Boolean = try { JSONObject(json).optBoolean("lock", false) } catch (e: Exception) { false }
+
+    fun getLock(ctx: Context, word: String): Boolean {
+        val j = getCustomGestures(ctx)[word.lowercase().trim()] ?: return false
+        return isLock(j)
+    }
+
+    fun setLock(ctx: Context, word: String, on: Boolean) {
+        val w = word.lowercase().trim()
+        val m = LinkedHashMap(getCustomGestures(ctx))
+        val cur = m[w] ?: return
+        val o = try { JSONObject(cur) } catch (e: Exception) { JSONObject() }
+        if (on) o.put("lock", true) else o.remove("lock")
+        m[w] = o.toString()
+        writeGestures(ctx, m)
     }
 
     // --- Жест запуска записи голосового по конкретному приложению ---

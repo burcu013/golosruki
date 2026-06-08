@@ -763,6 +763,17 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.postDelayed(idleRunnable, idleMs)
     }
 
+    /** Принудительно увести микрофон в сон (используется жестом с включённым флагом «сон после жеста»). */
+    fun goToSleep() {
+        handler.removeCallbacks(idleRunnable)
+        if (aiListening) { aiListening = false }
+        state = State.ASLEEP
+        VoiceAccessibilityService.instance?.showStatus(stateText())
+        VoiceAccessibilityService.instance?.keepScreenOn(false)
+        refreshNotification()
+        Logger.log("REC", "Жест: микрофон уведён в сон")
+    }
+
     override fun onResult(hypothesis: String?) {
         val raw = hypothesis?.let { JSONObject(it).optString("text") } ?: return
         val text = normalize(raw.replace("[unk]", " "))
@@ -1025,6 +1036,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 else -> { pendingGestureCalib = false }  // иначе сбрасываем и обрабатываем как обычную команду
             }
         }
+        if (text.contains("что нового") || text.contains("что новенького") ||
+            text.contains("прочитай уведомл") || text.contains("зачитай уведомл") || text.contains("какие уведомл")) {
+            Logger.log("CMD", "Чтение уведомлений")
+            speak(NotificationService.recentSummary(this, 5))
+            return
+        }
         if (text.contains("повтори")) {
             lastCmdText?.let { last ->
                 Logger.log("CMD", "Повтор: $last")
@@ -1068,6 +1085,17 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
         val cmd = CommandParser.parse(text, personal)
         Logger.log("CMD", "Команда: ${cmd.label()}")
+
+        // «Только по Иван»: строгий жест — лишь если в фразе было слово активации
+        if (cmd is Command.CustomGesture && GestureStore.isStrict(cmd.json) && !text.contains(wakeWord)) {
+            Logger.log("CMD", "Жест «${cmd.name}» только по «$wakeWord» — пропуск")
+            return
+        }
+        // Запуск приложений — по настройке только по «Иван <слово>»
+        if (cmd is Command.OpenApp && SettingsStore.getLaunchRequireWake(this) && !text.contains(wakeWord)) {
+            Logger.log("CMD", "Запуск «${cmd.name}» только по «$wakeWord» — пропуск")
+            return
+        }
 
         // Подтверждение звонка (если включено в настройках)
         if (confirmCalls && cmd is Command.CallContact) {

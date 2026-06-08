@@ -143,6 +143,10 @@ object SettingsStore {
     fun getAiBackend(ctx: Context): String = p(ctx).getString("ai_backend", "auto") ?: "auto"
     fun setAiBackend(ctx: Context, v: String) = p(ctx).edit().putString("ai_backend", v).apply()
 
+    // Объявлять входящие уведомления голосом.
+    fun getAnnounceNotifs(ctx: Context): Boolean = p(ctx).getBoolean("announce_notifs", false)
+    fun setAnnounceNotifs(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("announce_notifs", v).apply()
+
     // Калибровка кнопки записи: доли экрана (x,y в 0..1) по пакету приложения.
     fun getRecPointFrac(ctx: Context, pkg: String): Pair<Float, Float>? {
         if (pkg.isBlank()) return null
@@ -180,6 +184,10 @@ object SettingsStore {
     fun setTtsVoice(ctx: Context, v: String) = p(ctx).edit().putString("tts_voice", v).apply()
     fun getConfirmCalls(ctx: Context): Boolean = p(ctx).getBoolean("confirm_calls", false)
     fun setConfirmCalls(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("confirm_calls", v).apply()
+
+    // Запуск приложений своими командами — только по «Иван <слово>» (защита от случайного слова в свободном режиме).
+    fun getLaunchRequireWake(ctx: Context): Boolean = p(ctx).getBoolean("launch_require_wake", true)
+    fun setLaunchRequireWake(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("launch_require_wake", v).apply()
     fun getSosNumber2(ctx: Context): String = p(ctx).getString("sos_num2", "") ?: ""
     fun setSosNumber2(ctx: Context, v: String) = p(ctx).edit().putString("sos_num2", v).apply()
 

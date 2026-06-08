@@ -59,13 +59,23 @@ class CustomGesturesActivity : ComponentActivity() {
         listBox.removeAllViews()
         val map = GestureStore.getCustomGestures(this)
         if (map.isEmpty()) { listBox.addView(UiKit.body(this, "Пока нет жестов.")); return }
-        for ((word, _) in map) {
+        for ((word, json) in map) {
             listBox.addView(TextView(this).apply {
                 text = "• «$word»  —  вызов: «Иван $word»"
                 textSize = 18f
                 setTypeface(UiKit.fontSemi(this@CustomGesturesActivity))
                 setTextColor(android.graphics.Color.parseColor("#1C1E22"))
                 setPadding(0, UiKit.dp(this@CustomGesturesActivity, 12), 0, 0)
+            })
+            listBox.addView(UiKit.switchView(this).apply {
+                text = "Только по «Иван $word» (не в свободном режиме)"; textSize = 14f
+                isChecked = GestureStore.isStrict(json)
+                setOnCheckedChangeListener { _, v -> GestureStore.setStrict(this@CustomGesturesActivity, word, v) }
+            })
+            listBox.addView(UiKit.switchView(this).apply {
+                text = "После жеста — сон (микрофон засыпает, статус «Сон», будить «Иван»)"; textSize = 14f
+                isChecked = GestureStore.isLock(json)
+                setOnCheckedChangeListener { _, v -> GestureStore.setLock(this@CustomGesturesActivity, word, v) }
             })
             listBox.addView(UiKit.iconButton(this, "🗑 Удалить «$word»", R.drawable.btn_amber) { delete(word) })
         }

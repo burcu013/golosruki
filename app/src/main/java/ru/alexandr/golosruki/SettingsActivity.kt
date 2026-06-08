@@ -257,6 +257,11 @@ class SettingsActivity : ComponentActivity() {
         val oc = UiKit.card(this)
         oc.addView(UiKit.sectionHeader(this, "Свои команды запуска"))
         oc.addView(UiKit.body(this, "Задайте слово-команду и выберите приложение. Скажете слово — приложение откроется."))
+        oc.addView(UiKit.switchView(this).apply {
+            text = "Запускать только по «Иван <слово>» (иначе — и в свободном режиме)"; textSize = 15f
+            isChecked = SettingsStore.getLaunchRequireWake(this@SettingsActivity)
+            setOnCheckedChangeListener { _, v -> SettingsStore.setLaunchRequireWake(this@SettingsActivity, v) }
+        })
         openBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         oc.addView(openBox)
         val savedOpen = SettingsStore.getOpenCommands(this).toList()
@@ -276,6 +281,20 @@ class SettingsActivity : ComponentActivity() {
             startActivity(android.content.Intent(this, CustomGesturesActivity::class.java))
         })
         col.addView(gc)
+
+        // Уведомления
+        val nc = UiKit.card(this)
+        nc.addView(UiKit.sectionHeader(this, "Уведомления"))
+        nc.addView(UiKit.body(this, "«Иван что нового» — Иван зачитает последние уведомления. Нужен разовый доступ к уведомлениям."))
+        nc.addView(UiKit.button(this, "🔔 Дать доступ к уведомлениям") {
+            runCatching { startActivity(android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")) }
+        })
+        nc.addView(UiKit.switchView(this).apply {
+            text = "Объявлять входящие уведомления голосом"
+            isChecked = SettingsStore.getAnnounceNotifs(this@SettingsActivity)
+            setOnCheckedChangeListener { _, v -> SettingsStore.setAnnounceNotifs(this@SettingsActivity, v) }
+        })
+        col.addView(nc)
 
         // --- Клавиатура ГолосРуки (IME) ---
         val kbc = UiKit.card(this)

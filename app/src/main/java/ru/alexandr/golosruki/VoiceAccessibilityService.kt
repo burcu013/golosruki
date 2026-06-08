@@ -138,7 +138,10 @@ class VoiceAccessibilityService : AccessibilityService() {
             Command.RecordCancel -> recordCancel()
             Command.CalibrateRecord -> startRecordCalibration()
             Command.CalibrateRecordGesture -> startRecordGestureCalibration()
-            is Command.CustomGesture -> { if (!playGesture(command.json)) showStatus("Жест не выполнен") }
+            is Command.CustomGesture -> {
+                if (!playGesture(command.json)) showStatus("Жест не выполнен")
+                else if (GestureStore.isLock(command.json)) VoiceRecognitionService.instance?.goToSleep()
+            }
             Command.MediaPause -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
             Command.MediaPlay -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PLAY)
             Command.MediaNext -> mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_NEXT)

@@ -178,6 +178,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var dictationDigits = false
     @Volatile private var recordingVoice = false   // идёт запись голосового: глушим всё, кроме «Иван отправь/отмена»
     @Volatile private var heardWakeInUtterance = false  // в текущей распознанной фразе было слово активации
+    private var lastResultText = ""                     // антидубль: последний обработанный финал…
+    private var lastResultAt = 0L                       // …и когда (Vosk повторяет один и тот же результат подряд)
 
     private val recordingOff = Runnable { recordingVoice = false; Logger.log("REC", "Запись голосового: авто-сброс по таймауту") }
     /** Включает/выключает режим записи голосового. В нём команды не парсятся — нужен явный «Иван отправь/отмена». */
@@ -624,6 +626,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     fun enterDictation(digits: Boolean = false) {
         val alreadyDictating = dictation
+        lastResultText = ""        // сброс антидубля при смене режима
         dictation = true
         switchToVoiceIme()   // во время диктовки — наша клавиатура (если настроена)
         dictationDigits = digits
@@ -646,6 +649,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private fun exitDictation() {
         dictation = false
         dictationDigits = false
+        lastResultText = ""        // сброс антидубля при смене режима
         dictBuffer.setLength(0)
         switchBackIme()   // вернуть обычную клавиатуру
         VoiceAccessibilityService.instance?.setStatusIcon(OverlayView.Icon.DOT)
@@ -781,6 +785,19 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (text.isBlank()) return
         Logger.log("HEARD", "'$text' | state=$state media=$mediaControlMode dict=$dictation digits=$dictationDigits call=${inCall()} mode=${audioModeName()} tel=${telStateName()}")
         heardWakeInUtterance = text.contains(wakeWord)   // фиксируем ДО любого вырезания «иван»
+
+        // АНТИДУБЛЬ: Vosk иногда отдаёт один и тот же финал десятки раз подряд (без перезапуска прослушки).
+        // Это рождает «напиши напиши напиши…», «126 126 126…» в диктовке и спам команд. Гасим повтор того же
+        // текста, пока он сыпется непрерывно (окно обновляется на каждом дубле).
+        run {
+            val nowMs = System.currentTimeMillis()
+            if (text == lastResultText && nowMs - lastResultAt < 1200) {
+                lastResultAt = nowMs
+                return
+            }
+            lastResultText = text
+            lastResultAt = nowMs
+        }
 
         // Во время озвучки: реагируем ТОЛЬКО на прерывание «Иван + хватит/стоп».
         if (isSpeaking) {

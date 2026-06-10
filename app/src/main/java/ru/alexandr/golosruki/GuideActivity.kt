@@ -183,7 +183,7 @@ class GuideActivity : ComponentActivity() {
 
         section("ℹ️ Разработчик", listOf(
             "Донбасс Реклама — donbassreklama.ru",
-            "Версия 6.82"
+            "Версия 6.83"
         ), col)
 
         setContentView(ScrollView(this).apply { addView(col) })

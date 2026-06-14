@@ -678,7 +678,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (ask) lastAiQuestion = query     // для команды «подробнее»
         aiThinking = true
         handler.removeCallbacks(idleRunnable)   // не засыпать, пока модель думает
-        VoiceAccessibilityService.instance?.showStatus("🧠 Думаю…")
+        val online = CloudAi.isConfigured(this) && Net.isOnline(this)
+        VoiceAccessibilityService.instance?.showStatus(if (online) "🧠 Думаю (онлайн)…" else "🧠 Думаю…")
         Logger.log("AI", "Запрос (${if (ask) "спроси" else "сформулируй"}): '$query'")
         Thread {
             val answer = LocalAi.answer(this, ask, query)

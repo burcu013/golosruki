@@ -147,6 +147,16 @@ object SettingsStore {
     fun getAnnounceNotifs(ctx: Context): Boolean = p(ctx).getBoolean("announce_notifs", false)
     fun setAnnounceNotifs(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("announce_notifs", v).apply()
 
+    // Онлайн-модель (OpenAI-совместимый API): вкл, базовый URL, ключ, имя модели.
+    fun getApiEnabled(ctx: Context): Boolean = p(ctx).getBoolean("api_enabled", false)
+    fun setApiEnabled(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("api_enabled", v).apply()
+    fun getApiUrl(ctx: Context): String = p(ctx).getString("api_url", "") ?: ""
+    fun setApiUrl(ctx: Context, v: String) = p(ctx).edit().putString("api_url", v).apply()
+    fun getApiKey(ctx: Context): String = p(ctx).getString("api_key", "") ?: ""
+    fun setApiKey(ctx: Context, v: String) = p(ctx).edit().putString("api_key", v).apply()
+    fun getApiModel(ctx: Context): String = p(ctx).getString("api_model", "") ?: ""
+    fun setApiModel(ctx: Context, v: String) = p(ctx).edit().putString("api_model", v).apply()
+
     // Калибровка кнопки записи: доли экрана (x,y в 0..1) по пакету приложения.
     fun getRecPointFrac(ctx: Context, pkg: String): Pair<Float, Float>? {
         if (pkg.isBlank()) return null

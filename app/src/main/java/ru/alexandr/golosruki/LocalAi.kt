@@ -44,6 +44,37 @@ object LocalAi {
         // 4) Мета-вопросы о самом помощнике — мгновенно, без модели (экономия).
         if (ask) metaAnswer(userText)?.let { Logger.log("AI", "Мета-ответ: $it"); return it }
 
+        // 5) Облачная модель — если включена и есть интернет (приоритет, с откатом на локальную).
+        if (CloudAi.isConfigured(ctx) && Net.isOnline(ctx)) {
+            val sysC: String
+            val userC: String
+            if (ask) {
+                val now = java.text.SimpleDateFormat("d MMMM yyyy, EEEE, HH:mm", java.util.Locale("ru", "RU")).format(java.util.Date())
+                sysC = buildString {
+                    append("Ты — Иван, голосовой помощник. Отвечай по-русски, по делу, законченной мыслью, без воды. ")
+                    append("Сейчас $now. Не здоровайся и не переспрашивай — сразу отвечай. ")
+                    append("Ответ зачитывается вслух: пиши обычным текстом, без markdown, списков, звёздочек и заголовков. ")
+                    append(AiProfile.buildPersona(profile, full = true))
+                }
+                userC = buildAskPrompt(userText, true)
+            } else {
+                sysC = "Ты составляешь готовый текст на русском (письмо, сообщение, заголовок — по запросу). " +
+                    "Выдавай ТОЛЬКО итоговый текст, без пояснений, приветствий и подписи, если о них прямо не просят."
+                userC = "Составь текст по запросу: «$userText». Выдай только готовый текст."
+            }
+            val cloud = CloudAi.chat(ctx, sysC, userC)
+            if (!cloud.isNullOrBlank()) {
+                Logger.log("AI", "Облачный ответ")
+                val out = clean(cloud)
+                if (ask && out.isNotBlank()) {
+                    history.addLast(userText to out)
+                    while (history.size > HISTORY_MAX) history.removeFirst()
+                }
+                return out
+            }
+            Logger.log("AI", "Облако недоступно — откат на локальную модель")
+        }
+
         // Маршрутизация между слотами моделей (умная/простая) по режиму и сложности.
         val smartPath = SettingsStore.getAiModelPath(ctx)
         val simplePath = SettingsStore.getAiModelSimplePath(ctx)

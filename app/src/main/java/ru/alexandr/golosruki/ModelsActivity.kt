@@ -142,6 +142,52 @@ class ModelsActivity : ComponentActivity() {
         cu.addView(UiKit.iconButton(this, "⚡ Файл с устройства → простая", R.drawable.btn_amber) { pickInto("simple") })
         col.addView(cu)
 
+        // Онлайн-модель (API)
+        val api = UiKit.card(this)
+        api.addView(UiKit.sectionHeader(this, "Онлайн-модель (API)"))
+        api.addView(UiKit.body(this, "Облачная модель по OpenAI-совместимому API (OpenAI, OpenRouter, свой сервер). Когда включено и есть интернет — ответы идут через неё; без сети — автоматически офлайн-модель. Команды, будилка и распознавание всегда офлайн."))
+        val apiSwitch = UiKit.switchView(this).apply {
+            text = "Использовать онлайн-модель при интернете"
+            isChecked = SettingsStore.getApiEnabled(this@ModelsActivity)
+        }
+        api.addView(apiSwitch)
+        val apiUrl = EditText(this).apply {
+            hint = "URL, напр. https://api.openai.com/v1"
+            setText(SettingsStore.getApiUrl(this@ModelsActivity))
+        }
+        api.addView(UiKit.body(this, "Адрес API:")); api.addView(apiUrl)
+        val apiKey = EditText(this).apply {
+            hint = "Ключ (Bearer)"
+            setText(SettingsStore.getApiKey(this@ModelsActivity))
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        api.addView(UiKit.body(this, "Ключ API:")); api.addView(apiKey)
+        val apiModel = EditText(this).apply {
+            hint = "Модель, напр. gpt-4o-mini"
+            setText(SettingsStore.getApiModel(this@ModelsActivity))
+        }
+        api.addView(UiKit.body(this, "Модель:")); api.addView(apiModel)
+        api.addView(UiKit.button(this, "Сохранить и проверить") {
+            SettingsStore.setApiEnabled(this, apiSwitch.isChecked)
+            SettingsStore.setApiUrl(this, apiUrl.text.toString().trim())
+            SettingsStore.setApiKey(this, apiKey.text.toString().trim())
+            SettingsStore.setApiModel(this, apiModel.text.toString().trim())
+            status.text = "Проверяю онлайн-модель…"
+            Thread {
+                val msg = when {
+                    !apiSwitch.isChecked -> "Сохранено. Онлайн-модель выключена."
+                    !Net.isOnline(this) -> "Сохранено. Сейчас нет интернета — будет работать офлайн-модель."
+                    else -> {
+                        val r = CloudAi.chat(this, "Ты — помощник. Ответь одним словом.", "Скажи: готово")
+                        if (!r.isNullOrBlank()) "Онлайн-модель отвечает: «${r.take(40)}». Готово." 
+                        else "Не удалось получить ответ. Проверьте адрес, ключ и имя модели."
+                    }
+                }
+                runOnUiThread { status.text = msg }
+            }.start()
+        })
+        col.addView(api)
+
         col.addView(UiKit.hint(this, "После смены модели первый ответ будет с задержкой — модель загружается в память."))
 
         setContentView(ScrollView(this).apply { addView(col) })

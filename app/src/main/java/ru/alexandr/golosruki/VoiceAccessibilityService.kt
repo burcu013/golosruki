@@ -171,6 +171,7 @@ class VoiceAccessibilityService : AccessibilityService() {
             is Command.TapText -> tapByText(command.label)
             is Command.AutoScroll -> startAutoScroll(command.direction)
             is Command.CallContact -> { VoiceRecognitionService.instance?.speak("Звоню ${command.name}"); doCall(command.number) }
+            is Command.CallQuery -> {}   // разрешается в VoiceRecognitionService (поиск/окно выбора), сюда не доходит
             is Command.OpenApp -> { VoiceRecognitionService.instance?.speak("Открываю ${command.name}"); openApp(command.pkg) }
             Command.Help -> overlay.showHelp()
             Command.Pause -> VoiceRecognitionService.setPaused(true)

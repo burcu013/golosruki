@@ -52,11 +52,9 @@ object CommandParser {
             t.contains("напиши") || t.contains("написа") || t.contains("введи") || t.contains("набрать текст"))
             return Command.Dictation
 
-        // 0.3 Персональные: позвонить
+        // 0.3 Позвонить — отдаём запрос службе (поиск контактов + окно выбора при совпадениях)
         if (t.contains("позвони") || t.contains("набери") || t.contains("вызови") || t.contains("звонок")) {
-            val hit = matchContact(t, personal.contacts)
-            if (hit != null) return Command.CallContact(hit.first, hit.second)
-            return Command.Unknown   // «позвони …» не должно превращаться в тап/свайп по числу
+            return Command.CallQuery(t)
         }
         val wantsOpen = t.contains("откро") || t.contains("запус") || t.contains("выполн")
         // 0.35 Кастомные команды запуска (своя фраза -> приложение) — ТОЛЬКО с глаголом «открой/запусти/выполни».

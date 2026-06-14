@@ -54,7 +54,8 @@ object Vocabulary {
         "ноль", "один", "одна", "два", "две", "три", "четыре", "пять",
         "шесть", "семь", "восемь", "девять", "десять", "одиннадцать", "двенадцать",
         "тринадцать", "четырнадцать", "пятнадцать", "шестнадцать", "семнадцать",
-        "восемнадцать", "девятнадцать", "двадцать", "тридцать", "сорок", "пятьдесят"
+        "восемнадцать", "девятнадцать", "двадцать", "тридцать", "сорок", "пятьдесят",
+        "первый", "второй", "третий", "четвёртый", "четвертый", "пятый"
     )
 
     /** Строит JSON-грамматику с учётом слова активации, персональных имён и приложений. */
@@ -62,6 +63,7 @@ object Vocabulary {
         val words = base.toMutableSet()
         wakeWord.split(" ").forEach { if (it.isNotBlank()) words.add(it) }
         personal.contacts.keys.forEach { name -> name.split(" ").forEach { words.add(it) } }
+        personal.contactNames.forEach { words.add(it) }
         personal.apps.keys.forEach { name -> name.split(" ").forEach { words.add(it) } }
         personal.customApps.keys.forEach { phrase -> phrase.split(" ").forEach { words.add(it) } }
         personal.customGestures.keys.forEach { phrase -> phrase.split(" ").forEach { words.add(it) } }

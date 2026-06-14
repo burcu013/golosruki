@@ -213,11 +213,38 @@ class ModelsActivity : ComponentActivity() {
             setText(SettingsStore.getSttModel(this@ModelsActivity))
         }
         stt.addView(UiKit.body(this, "Модель (напр. whisper-large-v3):")); stt.addView(sttModel)
+
+        stt.addView(UiKit.sectionHeader(this, "Тонкая настройка записи"))
+        val vadSilence = EditText(this).apply {
+            hint = "1.2"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText((SettingsStore.getVadSilenceMs(this@ModelsActivity) / 1000.0).toString())
+        }
+        stt.addView(UiKit.body(this, "Пауза до остановки, сек (больше — спокойнее паузы в речи):")); stt.addView(vadSilence)
+        val vadMax = EditText(this).apply {
+            hint = "15"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText((SettingsStore.getVadMaxMs(this@ModelsActivity) / 1000).toString())
+        }
+        stt.addView(UiKit.body(this, "Максимум записи, сек:")); stt.addView(vadMax)
+        val vadSens = EditText(this).apply {
+            hint = "5"
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            setText(SettingsStore.getVadSensitivity(this@ModelsActivity).toString())
+        }
+        stt.addView(UiKit.body(this, "Чувствительность 1–10 (выше — ловит тихую речь, но и шум):")); stt.addView(vadSens)
+
         stt.addView(UiKit.button(this, "Сохранить и проверить") {
             SettingsStore.setSttEnabled(this, sttSwitch.isChecked)
             SettingsStore.setSttUrl(this, sttUrl.text.toString().trim())
             SettingsStore.setSttKey(this, sttKey.text.toString().trim())
             SettingsStore.setSttModel(this, sttModel.text.toString().trim())
+            val sil = (vadSilence.text.toString().trim().toDoubleOrNull() ?: 1.2).coerceIn(0.4, 5.0)
+            SettingsStore.setVadSilenceMs(this, (sil * 1000).toInt())
+            val mx = (vadMax.text.toString().trim().toIntOrNull() ?: 15).coerceIn(5, 120)
+            SettingsStore.setVadMaxMs(this, mx * 1000)
+            val sn = (vadSens.text.toString().trim().toIntOrNull() ?: 5).coerceIn(1, 10)
+            SettingsStore.setVadSensitivity(this, sn)
             status.text = "Проверяю распознавание…"
             Thread {
                 val msg = when {

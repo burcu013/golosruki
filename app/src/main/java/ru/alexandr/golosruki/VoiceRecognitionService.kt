@@ -237,12 +237,14 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var tts: android.speech.tts.TextToSpeech? = null
     @Volatile private var ttsReady = false
     @Volatile private var isSpeaking = false
+    @Volatile private var afterSpeak: (() -> Unit)? = null   // одноразовое действие после окончания речи
     private var ttsEnabled = true
     private var ttsPitch = 1.0f
     private var ttsRate = 1.0f
     private var ttsVoiceName = ""
     private var confirmCalls = false
     private var pendingCall: Pair<String, String>? = null   // имя -> номер (ожидает «да»)
+    private var pendingContactChoice: List<Contacts.C>? = null   // несколько совпадений — ждём номер выбора
     private var pendingGestureCalib = false                  // ожидает подтверждения записи жеста
 
     private val idleRunnable = Runnable {
@@ -366,7 +368,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             }
             tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
                 override fun onStart(id: String?) { isSpeaking = true }
-                override fun onDone(id: String?) { scheduleResume(500); post { VoiceAccessibilityService.instance?.releaseStatusHold() } }
+                override fun onDone(id: String?) {
+                    val cb = afterSpeak
+                    if (cb != null) { afterSpeak = null; handler.post { cb() } }
+                    else { scheduleResume(500); post { VoiceAccessibilityService.instance?.releaseStatusHold() } }
+                }
                 @Deprecated("deprecated") override fun onError(id: String?) { scheduleResume(500) }
             })
         }
@@ -461,6 +467,17 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         }
         // страховка, если движок не сообщит об окончании
         scheduleResume(1800L + text.length * 90L)
+    }
+
+    /** Сказать фразу и затем (после окончания речи) выполнить действие. Используется для голосовых подсказок перед записью. */
+    fun speakThen(text: String, action: () -> Unit) {
+        if (!ttsEnabled || !ttsReady) { action(); return }
+        afterSpeak = action
+        isSpeaking = true
+        handler.removeCallbacks(resumeAfterSpeak)   // НЕ возобновлять Vosk автоматически — действие решит само
+        runCatching { tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki_then") }
+        // страховка, если onDone не придёт
+        handler.postDelayed({ val cb = afterSpeak; if (cb != null) { afterSpeak = null; cb() } }, 1800L + text.length * 90L)
     }
 
     private fun vibrateTick() {
@@ -687,7 +704,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         listeningStop()   // освободить микрофон от Vosk
         Thread {
             try { Thread.sleep(200) } catch (e: InterruptedException) {}   // дать мику освободиться
-            val wav = MicRecorder.recordWav()
+            val wav = MicRecorder.recordWav(
+                maxMs = SettingsStore.getVadMaxMs(this),
+                silenceMs = SettingsStore.getVadSilenceMs(this),
+                sensitivity = SettingsStore.getVadSensitivity(this)
+            )
             val text = if (wav != null) CloudStt.transcribe(this, wav) else null
             post {
                 cloudCapturing = false
@@ -810,6 +831,93 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         refreshNotification()
         Logger.log("REC", "Жест: микрофон уведён в сон")
     }
+
+    /** Разрешение «позвони X»: поиск контактов → звонок (1), окно выбора (несколько) или захват имени голосом/подсказка (0). */
+    private fun resolveCall(query: String) {
+        val cands = Contacts.search(this, query)
+        when {
+            cands.isEmpty() -> {
+                if (CloudStt.isConfigured(this) && Net.isOnline(this)) startNameCapture()
+                else {
+                    speak("Не нашёл контакт. Назовите имя")
+                    VoiceAccessibilityService.instance?.showStatus("Контакт не найден — назовите имя")
+                }
+            }
+            cands.size == 1 -> startCall(cands[0].name, cands[0].number)
+            else -> showContactChoice(cands)
+        }
+    }
+
+    private fun showContactChoice(cands: List<Contacts.C>) {
+        pendingContactChoice = cands
+        val lines = cands.mapIndexed { i, c -> "${i + 1}. ${capWords(c.name)}" }.joinToString("\n")
+        VoiceAccessibilityService.instance?.showStatusHold("Кого набрать?\n$lines\nСкажите номер или «отмена»", cands.size + 3, 21000)
+        val spoken = "Нашёл несколько. " +
+            cands.mapIndexed { i, c -> "${ordinal(i + 1)} — ${c.name}" }.joinToString(". ") +
+            ". Скажите номер."
+        speak(spoken)
+        handler.postDelayed({ if (pendingContactChoice != null) { pendingContactChoice = null; Logger.log("CMD", "Выбор контакта истёк") } }, 20000)
+    }
+
+    /** Гибрид: имя контакта не распозналось офлайн — просим назвать и распознаём облаком (Whisper). */
+    private fun startNameCapture() {
+        VoiceAccessibilityService.instance?.showStatus("🎤 Назовите имя…")
+        speakThen("Назовите имя") {
+            isSpeaking = false
+            listeningStop()   // освободить микрофон под запись
+            Thread {
+                try { Thread.sleep(150) } catch (e: InterruptedException) {}
+                val wav = MicRecorder.recordWav(
+                    maxMs = 8000,
+                    silenceMs = SettingsStore.getVadSilenceMs(this),
+                    sensitivity = SettingsStore.getVadSensitivity(this)
+                )
+                val name = if (wav != null) CloudStt.transcribe(this, wav) else null
+                post {
+                    restartListening(); resetIdle()   // вернуть Vosk (для выбора/подтверждения)
+                    if (name.isNullOrBlank()) {
+                        Logger.log("STT", "Имя не распознано: ${CloudStt.lastError}")
+                        speak("Не расслышал имя")
+                    } else {
+                        Logger.log("STT", "Имя: '$name'")
+                        val cands = Contacts.search(this, name)
+                        when {
+                            cands.isEmpty() -> speak("Не нашёл контакт $name")
+                            cands.size == 1 -> startCall(cands[0].name, cands[0].number)
+                            else -> showContactChoice(cands)
+                        }
+                    }
+                }
+            }.start()
+        }
+    }
+
+    private fun startCall(name: String, number: String) {
+        if (confirmCalls) {
+            pendingCall = name to number
+            VoiceAccessibilityService.instance?.showStatus("Звоню $name? Скажите «да» или «нет»")
+            speak("Звоню $name? Скажите да или нет")
+            handler.postDelayed({ if (pendingCall != null) { pendingCall = null; Logger.log("CMD", "Подтверждение истекло") } }, 15000)
+        } else {
+            post { VoiceAccessibilityService.instance?.execute(Command.CallContact(name, number)) }
+        }
+    }
+
+    private fun choiceIndex(t: String): Int = when {
+        t.contains("перв") || t.contains("один") || t.contains("одна") -> 1
+        t.contains("втор") || t.contains("два") || t.contains("две") -> 2
+        t.contains("трет") || t.contains("три") -> 3
+        t.contains("четверт") || t.contains("четыре") -> 4
+        t.contains("пят") -> 5
+        else -> 0
+    }
+
+    private fun ordinal(n: Int): String = when (n) {
+        1 -> "первый"; 2 -> "второй"; 3 -> "третий"; 4 -> "четвёртый"; 5 -> "пятый"; else -> "$n"
+    }
+
+    private fun capWords(s: String): String =
+        s.split(" ").joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
 
     override fun onResult(hypothesis: String?) {
         val raw = hypothesis?.let { JSONObject(it).optString("text") } ?: return
@@ -1068,6 +1176,30 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 else -> { pendingCall = null }  // иначе сбрасываем и обрабатываем как обычную команду
             }
         }
+        // Ожидание выбора контакта из нескольких совпадений
+        pendingContactChoice?.let { list ->
+            when {
+                text.contains("отмена") || text.contains("нет") || text.contains("стоп") || text.contains("не надо") -> {
+                    pendingContactChoice = null
+                    VoiceAccessibilityService.instance?.releaseStatusHold()
+                    speak("Отменено"); VoiceAccessibilityService.instance?.showStatus("Отменено")
+                    return
+                }
+                else -> {
+                    val idx = choiceIndex(text)
+                    if (idx in 1..list.size) {
+                        val c = list[idx - 1]
+                        pendingContactChoice = null
+                        VoiceAccessibilityService.instance?.releaseStatusHold()
+                        Logger.log("CMD", "Выбран контакт #$idx: ${c.name}")
+                        startCall(c.name, c.number)
+                    } else {
+                        Logger.log("CMD", "Выбор не распознан: '$text' — ждём")
+                    }
+                    return   // ждём корректный номер или «отмена»
+                }
+            }
+        }
         // Ожидание подтверждения записи жеста (защита от случайного запуска холста)
         if (pendingGestureCalib) {
             when {
@@ -1164,6 +1296,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
         val cmd = CommandParser.parse(text, personal)
         Logger.log("CMD", "Команда: ${cmd.label()}")
+
+        if (cmd is Command.CallQuery) { resolveCall(cmd.query); return }
 
         // «Только по Иван»: строгий жест — лишь если в фразе было слово активации
         if (cmd is Command.CustomGesture && GestureStore.isStrict(cmd.json) && !heardWakeInUtterance) {

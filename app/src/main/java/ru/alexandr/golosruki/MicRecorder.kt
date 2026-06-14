@@ -18,10 +18,12 @@ object MicRecorder {
     fun recordWav(
         maxMs: Int = 15000,        // максимум записи
         silenceMs: Int = 1200,     // тишина после речи → стоп
-        startTimeoutMs: Int = 6000 // не начал говорить → отмена
+        startTimeoutMs: Int = 6000, // не начал говорить → отмена
+        sensitivity: Int = 5       // 1..10, выше = ловит более тихую речь (ниже порог)
     ): ByteArray? {
         val minBuf = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (minBuf <= 0) return null
+        val sensFactor = sensitivity.coerceIn(1, 10) / 5.0   // 0.2..2.0
         val bufSize = maxOf(minBuf, RATE / 5 * 2) // ~200 мс
         val rec = try {
             AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE,
@@ -52,7 +54,7 @@ object MicRecorder {
                 // Калибровка шумового порога по первым ~400 мс.
                 if (calibFrames < 2) {
                     noiseFloor = if (calibFrames == 0) rms else (noiseFloor + rms) / 2
-                    threshold = maxOf(700.0, noiseFloor * 3.0 + 400.0)
+                    threshold = maxOf(700.0, noiseFloor * 3.0 + 400.0) / sensFactor
                     calibFrames++
                 }
 

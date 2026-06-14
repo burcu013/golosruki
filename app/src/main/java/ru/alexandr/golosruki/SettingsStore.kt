@@ -167,6 +167,18 @@ object SettingsStore {
     fun getSttModel(ctx: Context): String = p(ctx).getString("stt_model", "") ?: ""
     fun setSttModel(ctx: Context, v: String) = p(ctx).edit().putString("stt_model", v).apply()
 
+    // Тонкая настройка записи для онлайн-распознавания (VAD).
+    fun getVadSilenceMs(ctx: Context): Int = p(ctx).getInt("vad_silence_ms", 1200)
+    fun setVadSilenceMs(ctx: Context, v: Int) = p(ctx).edit().putInt("vad_silence_ms", v).apply()
+    fun getVadMaxMs(ctx: Context): Int = p(ctx).getInt("vad_max_ms", 15000)
+    fun setVadMaxMs(ctx: Context, v: Int) = p(ctx).edit().putInt("vad_max_ms", v).apply()
+    fun getVadSensitivity(ctx: Context): Int = p(ctx).getInt("vad_sens", 5)   // 1..10, выше = ловит тише
+    fun setVadSensitivity(ctx: Context, v: Int) = p(ctx).edit().putInt("vad_sens", v).apply()
+
+    // Использовать контакты телефонной книги (в дополнение к заданным в приложении).
+    fun getUseSystemContacts(ctx: Context): Boolean = p(ctx).getBoolean("use_sys_contacts", false)
+    fun setUseSystemContacts(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("use_sys_contacts", v).apply()
+
     // Калибровка кнопки записи: доли экрана (x,y в 0..1) по пакету приложения.
     fun getRecPointFrac(ctx: Context, pkg: String): Pair<Float, Float>? {
         if (pkg.isBlank()) return null

@@ -308,6 +308,27 @@ class SettingsActivity : ComponentActivity() {
         })
         col.addView(cc)
 
+        // Контакты телефона
+        val ctc = UiKit.card(this)
+        ctc.addView(UiKit.sectionHeader(this, "Контакты телефона"))
+        ctc.addView(UiKit.body(this, "Звонок любому из телефонной книги: «Иван позвони <имя>». При нескольких совпадениях появится список — скажите «первый/второй…». Сначала дайте доступ, затем включите. Будилка и команды работают офлайн."))
+        ctc.addView(UiKit.button(this, "📇 Дать доступ к контактам") {
+            androidx.core.app.ActivityCompat.requestPermissions(
+                this, arrayOf(android.Manifest.permission.READ_CONTACTS), 7012)
+        })
+        ctc.addView(UiKit.switchView(this).apply {
+            text = "Использовать контакты телефона"
+            isChecked = SettingsStore.getUseSystemContacts(this@SettingsActivity)
+            setOnCheckedChangeListener { _, v ->
+                SettingsStore.setUseSystemContacts(this@SettingsActivity, v)
+                Contacts.invalidate()
+                val i = Intent(this@SettingsActivity, VoiceRecognitionService::class.java)
+                    .setAction(VoiceRecognitionService.ACTION_APPLY)
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+            }
+        })
+        col.addView(ctc)
+
         // --- Клавиатура ГолосРуки (IME) ---
         val kbc = UiKit.card(this)
         kbc.addView(UiKit.sectionHeader(this, "⌨️ Диктовка везде"))

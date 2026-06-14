@@ -55,6 +55,7 @@ sealed class Command {
     data class TapText(val label: String) : Command()        // нажать кнопку по надписи
     data class AutoScroll(val direction: Direction) : Command() // непрерывное листание
     data class CallContact(val name: String, val number: String) : Command()
+    data class CallQuery(val query: String) : Command()   // «позвони X» — служба разрулит (поиск/выбор)
     data class OpenApp(val name: String, val pkg: String) : Command()
     object Help : Command()
     object Pause : Command()
@@ -111,6 +112,7 @@ sealed class Command {
         is TapText -> "Нажать «$label»"
         is AutoScroll -> "Листать ${direction.name.lowercase()}"
         is CallContact -> "Звоню: $name"
+        is CallQuery -> "Звонок: $query"
         is OpenApp -> "Открываю: $name"
         Help -> "Помощь"
         Pause -> "Пауза"

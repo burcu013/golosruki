@@ -667,11 +667,42 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             return
         }
         aiAsk = ask
+        // Облачное распознавание (Whisper), если настроено и есть интернет — иначе Vosk.
+        if (CloudStt.isConfigured(this) && Net.isOnline(this)) { startCloudCapture(ask); return }
         aiListening = true
         VoiceAccessibilityService.instance?.showStatus(stateText())
         Logger.log("AI", "Захват ${if (ask) "вопроса" else "текста"} для ИИ")
         restartListening()   // свободное распознавание
         resetIdle()
+    }
+
+    @Volatile private var cloudCapturing = false
+
+    /** Облачный захват речи: освобождаем мик у Vosk, пишем сегмент, шлём в Whisper, результат → ИИ. */
+    private fun startCloudCapture(ask: Boolean) {
+        cloudCapturing = true
+        handler.removeCallbacks(idleRunnable)
+        VoiceAccessibilityService.instance?.showStatus("🎤 Слушаю (онлайн)…")
+        Logger.log("STT", "Облачный захват (${if (ask) "вопрос" else "текст"})")
+        listeningStop()   // освободить микрофон от Vosk
+        Thread {
+            try { Thread.sleep(200) } catch (e: InterruptedException) {}   // дать мику освободиться
+            val wav = MicRecorder.recordWav()
+            val text = if (wav != null) CloudStt.transcribe(this, wav) else null
+            post {
+                cloudCapturing = false
+                if (text.isNullOrBlank()) {
+                    Logger.log("STT", "Пусто/ошибка: ${CloudStt.lastError}")
+                    // Откат: свободный захват через Vosk (офлайн-распознавание).
+                    aiListening = true
+                    VoiceAccessibilityService.instance?.showStatus(stateText())
+                    restartListening(); resetIdle()
+                } else {
+                    Logger.log("STT", "Whisper: '$text'")
+                    handleAi(ask, text)
+                }
+            }
+        }.start()
     }
 
     private fun handleAi(ask: Boolean, query: String) {
@@ -1055,6 +1086,22 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 }
                 else -> { pendingGestureCalib = false }  // иначе сбрасываем и обрабатываем как обычную команду
             }
+        }
+        if (text.contains("погод")) {
+            Logger.log("CMD", "Погода")
+            resetIdle()
+            VoiceAccessibilityService.instance?.showStatus("☁️ Узнаю погоду…")
+            val s = text
+            Thread {
+                val w = when {
+                    s.contains("послезавтра") -> Weather.daySummary(this, 2)
+                    s.contains("завтра") -> Weather.tomorrow(this)
+                    s.contains("недел") || s.contains("ближайш") || s.contains("несколько дн") || s.contains("на дни") -> Weather.week(this)
+                    else -> Weather.describe(this)
+                }
+                post { speak(w) }
+            }.start()
+            return
         }
         if (text.contains("нового") || text.contains("новенького") ||
             text.contains("прочитай уведомл") || text.contains("зачитай уведомл") || text.contains("какие уведомл")) {

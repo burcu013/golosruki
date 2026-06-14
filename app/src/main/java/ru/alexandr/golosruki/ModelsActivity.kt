@@ -188,6 +188,52 @@ class ModelsActivity : ComponentActivity() {
         })
         col.addView(api)
 
+        // Облачное распознавание речи (Whisper)
+        val stt = UiKit.card(this)
+        stt.addView(UiKit.sectionHeader(this, "Распознавание речи онлайн (Whisper)"))
+        stt.addView(UiKit.body(this, "Точное распознавание вопроса/текста для ИИ через облако (например, Groq — бесплатно). Включается только для «Иван спроси…» и «сформулируй…»; будилка, команды и диктовка остаются на офлайн-Vosk. Нужен отдельный ключ STT-провайдера (ключ от онлайн-модели/OpenRouter здесь НЕ подходит)."))
+        val sttSwitch = UiKit.switchView(this).apply {
+            text = "Распознавать вопрос для ИИ онлайн"
+            isChecked = SettingsStore.getSttEnabled(this@ModelsActivity)
+        }
+        stt.addView(sttSwitch)
+        val sttUrl = EditText(this).apply {
+            hint = "https://api.groq.com/openai/v1"
+            setText(SettingsStore.getSttUrl(this@ModelsActivity))
+        }
+        stt.addView(UiKit.body(this, "Адрес STT (Groq: https://api.groq.com/openai/v1):")); stt.addView(sttUrl)
+        val sttKey = EditText(this).apply {
+            hint = "Ключ (Bearer)"
+            setText(SettingsStore.getSttKey(this@ModelsActivity))
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        stt.addView(UiKit.body(this, "Ключ STT:")); stt.addView(sttKey)
+        val sttModel = EditText(this).apply {
+            hint = "whisper-large-v3"
+            setText(SettingsStore.getSttModel(this@ModelsActivity))
+        }
+        stt.addView(UiKit.body(this, "Модель (напр. whisper-large-v3):")); stt.addView(sttModel)
+        stt.addView(UiKit.button(this, "Сохранить и проверить") {
+            SettingsStore.setSttEnabled(this, sttSwitch.isChecked)
+            SettingsStore.setSttUrl(this, sttUrl.text.toString().trim())
+            SettingsStore.setSttKey(this, sttKey.text.toString().trim())
+            SettingsStore.setSttModel(this, sttModel.text.toString().trim())
+            status.text = "Проверяю распознавание…"
+            Thread {
+                val msg = when {
+                    !sttSwitch.isChecked -> "Сохранено. Онлайн-распознавание выключено."
+                    !Net.isOnline(this) -> "Сохранено. Сейчас нет интернета — распознавание будет офлайн (Vosk)."
+                    else -> {
+                        val r = CloudStt.transcribe(this, MicRecorder.silentWav(300))
+                        if (r != null) "STT-сервис отвечает — ключ рабочий."
+                        else "Не удалось: ${CloudStt.lastError}"
+                    }
+                }
+                runOnUiThread { status.text = msg }
+            }.start()
+        })
+        col.addView(stt)
+
         col.addView(UiKit.hint(this, "После смены модели первый ответ будет с задержкой — модель загружается в память."))
 
         setContentView(ScrollView(this).apply { addView(col) })

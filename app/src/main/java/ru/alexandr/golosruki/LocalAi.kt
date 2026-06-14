@@ -39,7 +39,14 @@ object LocalAi {
         if (ask) LocalFacts.answer(ctx, userText)?.let { Logger.log("AI", "Факт устройства: $it"); return it }
         // 3) Погода — Open-Meteo по геолокации (нужен интернет).
         if (ask && userText.lowercase().contains("погод")) {
-            val w = Weather.describe(ctx); Logger.log("AI", "Погода: $w"); return w
+            val s = userText.lowercase()
+            val w = when {
+                s.contains("послезавтра") -> Weather.daySummary(ctx, 2)
+                s.contains("завтра") -> Weather.tomorrow(ctx)
+                s.contains("недел") || s.contains("ближайш") || s.contains("несколько дн") -> Weather.week(ctx)
+                else -> Weather.describe(ctx)
+            }
+            Logger.log("AI", "Погода: $w"); return w
         }
         // 4) Мета-вопросы о самом помощнике — мгновенно, без модели (экономия).
         if (ask) metaAnswer(userText)?.let { Logger.log("AI", "Мета-ответ: $it"); return it }

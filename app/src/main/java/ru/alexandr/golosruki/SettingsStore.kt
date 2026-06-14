@@ -157,6 +157,16 @@ object SettingsStore {
     fun getApiModel(ctx: Context): String = p(ctx).getString("api_model", "") ?: ""
     fun setApiModel(ctx: Context, v: String) = p(ctx).edit().putString("api_model", v).apply()
 
+    // Облачное распознавание речи (Whisper, OpenAI-совместимый /audio/transcriptions, напр. Groq).
+    fun getSttEnabled(ctx: Context): Boolean = p(ctx).getBoolean("stt_enabled", false)
+    fun setSttEnabled(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("stt_enabled", v).apply()
+    fun getSttUrl(ctx: Context): String = p(ctx).getString("stt_url", "") ?: ""
+    fun setSttUrl(ctx: Context, v: String) = p(ctx).edit().putString("stt_url", v).apply()
+    fun getSttKey(ctx: Context): String = p(ctx).getString("stt_key", "") ?: ""
+    fun setSttKey(ctx: Context, v: String) = p(ctx).edit().putString("stt_key", v).apply()
+    fun getSttModel(ctx: Context): String = p(ctx).getString("stt_model", "") ?: ""
+    fun setSttModel(ctx: Context, v: String) = p(ctx).edit().putString("stt_model", v).apply()
+
     // Калибровка кнопки записи: доли экрана (x,y в 0..1) по пакету приложения.
     fun getRecPointFrac(ctx: Context, pkg: String): Pair<Float, Float>? {
         if (pkg.isBlank()) return null

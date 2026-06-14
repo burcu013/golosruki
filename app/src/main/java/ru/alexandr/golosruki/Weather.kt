@@ -33,6 +33,62 @@ object Weather {
         }
     }
 
+    /** Прогноз на день: offset 1 = завтра, 2 = послезавтра. */
+    fun daySummary(ctx: Context, offset: Int): String {
+        if (lastLocation(ctx) == null) return NO_LOC
+        val d = dailyOrNull(ctx, offset + 1) ?: return NET_FAIL
+        return try {
+            val times = d.getJSONArray("time")
+            "${labelCap(offset, times.getString(offset))}: ${dayLine(d, offset)}."
+        } catch (e: Exception) { NET_FAIL }
+    }
+
+    fun tomorrow(ctx: Context): String = daySummary(ctx, 1)
+
+    /** Прогноз на ближайшие дни (завтра и далее). */
+    fun week(ctx: Context): String {
+        if (lastLocation(ctx) == null) return NO_LOC
+        val d = dailyOrNull(ctx, 7) ?: return NET_FAIL
+        return try {
+            val times = d.getJSONArray("time")
+            val sb = StringBuilder("Погода на ближайшие дни. ")
+            for (i in 1 until times.length()) {
+                sb.append(labelCap(i, times.getString(i))).append(": ").append(dayLine(d, i)).append(". ")
+            }
+            sb.toString().trim()
+        } catch (e: Exception) { NET_FAIL }
+    }
+
+    private const val NO_LOC = "Не могу определить местоположение для погоды. Нужны разрешение «Геолокация» и включённый GPS."
+    private const val NET_FAIL = "Не удалось получить погоду — проверьте интернет."
+
+    private fun dailyOrNull(ctx: Context, days: Int): JSONObject? {
+        val loc = lastLocation(ctx) ?: return null
+        val url = "https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}" +
+            "&longitude=${loc.longitude}&daily=weather_code,temperature_2m_max,temperature_2m_min" +
+            "&forecast_days=$days&timezone=auto"
+        return try { JSONObject(httpGet(url)).getJSONObject("daily") } catch (e: Exception) { null }
+    }
+
+    private fun dayLine(d: JSONObject, i: Int): String {
+        val code = d.getJSONArray("weather_code").getInt(i)
+        val tmax = d.getJSONArray("temperature_2m_max").getDouble(i).roundToInt()
+        val tmin = d.getJSONArray("temperature_2m_min").getDouble(i).roundToInt()
+        return "${desc(code)}, от $tmin до $tmax°C"
+    }
+
+    private fun labelCap(offset: Int, dateStr: String): String = when (offset) {
+        1 -> "Завтра"
+        2 -> "Послезавтра"
+        else -> weekday(dateStr)
+    }
+
+    private fun weekday(dateStr: String): String = try {
+        val date = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale("ru", "RU")).parse(dateStr)
+        java.text.SimpleDateFormat("EEEE", java.util.Locale("ru", "RU")).format(date!!)
+            .replaceFirstChar { it.uppercase() }
+    } catch (e: Exception) { "Этот день" }
+
     private fun httpGet(urlStr: String): String {
         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"

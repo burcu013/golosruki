@@ -1429,6 +1429,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                     if (rest.length >= 3) handleQuery(text) else startQuery()
                     return
                 }
+                else -> {}
             }
         }
 

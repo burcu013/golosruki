@@ -152,10 +152,10 @@ class ModelsActivity : ComponentActivity() {
         }
         api.addView(apiSwitch)
         val apiUrl = EditText(this).apply {
-            hint = "URL, напр. https://api.openai.com/v1"
+            hint = "https://openrouter.ai/api/v1"
             setText(SettingsStore.getApiUrl(this@ModelsActivity))
         }
-        api.addView(UiKit.body(this, "Адрес API:")); api.addView(apiUrl)
+        api.addView(UiKit.body(this, "Адрес API (для OpenRouter: https://openrouter.ai/api/v1):")); api.addView(apiUrl)
         val apiKey = EditText(this).apply {
             hint = "Ключ (Bearer)"
             setText(SettingsStore.getApiKey(this@ModelsActivity))
@@ -179,8 +179,8 @@ class ModelsActivity : ComponentActivity() {
                     !Net.isOnline(this) -> "Сохранено. Сейчас нет интернета — будет работать офлайн-модель."
                     else -> {
                         val r = CloudAi.chat(this, "Ты — помощник. Ответь одним словом.", "Скажи: готово")
-                        if (!r.isNullOrBlank()) "Онлайн-модель отвечает: «${r.take(40)}». Готово." 
-                        else "Не удалось получить ответ. Проверьте адрес, ключ и имя модели."
+                        if (!r.isNullOrBlank()) "Онлайн-модель отвечает: «${r.take(40)}». Готово."
+                        else "Не удалось: ${CloudAi.lastError}. Адрес для OpenRouter: https://openrouter.ai/api/v1"
                     }
                 }
                 runOnUiThread { status.text = msg }

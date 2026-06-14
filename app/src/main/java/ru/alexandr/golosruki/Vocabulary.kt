@@ -55,7 +55,10 @@ object Vocabulary {
         "шесть", "семь", "восемь", "девять", "десять", "одиннадцать", "двенадцать",
         "тринадцать", "четырнадцать", "пятнадцать", "шестнадцать", "семнадцать",
         "восемнадцать", "девятнадцать", "двадцать", "тридцать", "сорок", "пятьдесят",
-        "первый", "второй", "третий", "четвёртый", "четвертый", "пятый"
+        "первый", "второй", "третий", "четвёртый", "четвертый", "пятый",
+        "запланируй", "запланировать", "назначь", "назначить", "поставь", "встречу", "событие",
+        "запиши", "план", "планирую", "напомни", "напомнить", "задачи", "задача",
+        "статус", "справка", "делам", "известно", "брифинг", "сводка", "день"
     )
 
     /** Строит JSON-грамматику с учётом слова активации, персональных имён и приложений. */
@@ -64,6 +67,7 @@ object Vocabulary {
         wakeWord.split(" ").forEach { if (it.isNotBlank()) words.add(it) }
         personal.contacts.keys.forEach { name -> name.split(" ").forEach { words.add(it) } }
         personal.contactNames.forEach { words.add(it) }
+        personal.secretaryTokens.forEach { words.add(it) }
         personal.apps.keys.forEach { name -> name.split(" ").forEach { words.add(it) } }
         personal.customApps.keys.forEach { phrase -> phrase.split(" ").forEach { words.add(it) } }
         personal.customGestures.keys.forEach { phrase -> phrase.split(" ").forEach { words.add(it) } }

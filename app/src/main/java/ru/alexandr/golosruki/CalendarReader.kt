@@ -61,6 +61,34 @@ object CalendarReader {
         return sb.toString()
     }
 
+    /** Названия событий, пересекающихся с интервалом [start, end). Для проверки конфликтов слотов. */
+    fun busyBetween(ctx: Context, start: Long, end: Long): List<String> {
+        if (!hasAccess(ctx)) return emptyList()
+        val builder = CalendarContract.Instances.CONTENT_URI.buildUpon()
+        ContentUris.appendId(builder, start - 1)
+        ContentUris.appendId(builder, end + 1)
+        val proj = arrayOf(
+            CalendarContract.Instances.TITLE,
+            CalendarContract.Instances.BEGIN,
+            CalendarContract.Instances.END,
+            CalendarContract.Instances.ALL_DAY
+        )
+        val out = ArrayList<String>()
+        try {
+            ctx.contentResolver.query(builder.build(), proj, null, null,
+                CalendarContract.Instances.BEGIN + " ASC")?.use { c ->
+                while (c.moveToNext()) {
+                    val title = (c.getString(0)?.trim().orEmpty()).ifBlank { "(без названия)" }
+                    val b = c.getLong(1); val e = c.getLong(2)
+                    val allDay = c.getInt(3) == 1
+                    if (allDay) continue
+                    if (b < end && e > start) out.add(title)   // пересечение
+                }
+            }
+        } catch (ex: Exception) { return emptyList() }
+        return out
+    }
+
     private fun plural(n: Int): String {
         val m10 = n % 10; val m100 = n % 100
         return when {

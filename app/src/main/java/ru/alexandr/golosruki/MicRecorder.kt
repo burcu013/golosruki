@@ -39,6 +39,10 @@ object MicRecorder {
         var started = false
         val startT = System.currentTimeMillis()
         var lastVoiceT = startT
+        // Пред-ролл: храним ~600 мс звука ДО начала речи, чтобы не срезать первый слог.
+        val preRoll = ArrayList<ByteArray>()
+        var preRollBytes = 0
+        val preRollCap = RATE * 2 * 600 / 1000
 
         return try {
             rec.startRecording()
@@ -51,29 +55,34 @@ object MicRecorder {
                 for (i in 0 until n) { val s = buf[i].toDouble(); sum += s * s }
                 val rms = sqrt(sum / n)
 
-                // Калибровка шумового порога по первым ~400 мс.
                 if (calibFrames < 2) {
                     noiseFloor = if (calibFrames == 0) rms else (noiseFloor + rms) / 2
-                    threshold = maxOf(700.0, noiseFloor * 3.0 + 400.0) / sensFactor
+                    threshold = maxOf(600.0, noiseFloor * 2.5 + 350.0) / sensFactor
                     calibFrames++
                 }
 
-                val voiced = rms > threshold
-                if (voiced) {
-                    if (!started) { started = true; Logger.log("STT", "Речь началась (порог ${threshold.toInt()})") }
-                    lastVoiceT = now
+                val bytes = ByteArray(n * 2)
+                for (i in 0 until n) {
+                    bytes[i * 2] = (buf[i].toInt() and 0xFF).toByte()
+                    bytes[i * 2 + 1] = ((buf[i].toInt() shr 8) and 0xFF).toByte()
                 }
-                // Пишем PCM только после начала речи (чтобы не тащить тишину в начале).
+
+                val voiced = rms > threshold
+                if (voiced && !started) {
+                    started = true
+                    Logger.log("STT", "Речь началась (порог ${threshold.toInt()})")
+                    for (b in preRoll) pcm.write(b)   // добавляем накопленный пред-ролл
+                    preRoll.clear(); preRollBytes = 0
+                }
+                if (voiced) lastVoiceT = now
+
                 if (started) {
-                    val bytes = ByteArray(n * 2)
-                    for (i in 0 until n) {
-                        bytes[i * 2] = (buf[i].toInt() and 0xFF).toByte()
-                        bytes[i * 2 + 1] = ((buf[i].toInt() shr 8) and 0xFF).toByte()
-                    }
                     pcm.write(bytes)
                     if (now - lastVoiceT > silenceMs) break        // пауза после речи → стоп
-                } else if (now - startT > startTimeoutMs) {
-                    Logger.log("STT", "Речи не было — отмена"); break  // так и не заговорил
+                } else {
+                    preRoll.add(bytes); preRollBytes += bytes.size
+                    while (preRollBytes > preRollCap && preRoll.isNotEmpty()) preRollBytes -= preRoll.removeAt(0).size
+                    if (now - startT > startTimeoutMs) { Logger.log("STT", "Речи не было — отмена"); break }
                 }
             }
             rec.stop()

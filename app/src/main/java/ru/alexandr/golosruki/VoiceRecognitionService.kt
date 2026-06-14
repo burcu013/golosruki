@@ -194,6 +194,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var lastAiQuestion = "" // последний вопрос к ИИ (для «подробнее»)
     @Volatile private var aiAsk = true     // true — вопрос, false — сформулировать текст
     @Volatile private var aiThinking = false  // идёт генерация ответа (модель «думает»)
+    @Volatile private var planning = false    // свободный захват — это план для секретаря (не вопрос)
+    @Volatile private var querying = false     // свободный захват — это вопрос к памяти секретаря
     private val dictBuffer = StringBuilder()
     @Volatile private var mediaControlMode = false
     private var mediaCode = "медиа"
@@ -245,6 +247,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var confirmCalls = false
     private var pendingCall: Pair<String, String>? = null   // имя -> номер (ожидает «да»)
     private var pendingContactChoice: List<Contacts.C>? = null   // несколько совпадений — ждём номер выбора
+    private var pendingPlan: PlanResult? = null   // разобранный план — ждёт подтверждения «да/нет»
     private var pendingGestureCalib = false                  // ожидает подтверждения записи жеста
 
     private val idleRunnable = Runnable {
@@ -919,6 +922,128 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private fun capWords(s: String): String =
         s.split(" ").joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
 
+    // ===== Секретарь (этап A) =====
+
+    /** Старт свободного захвата плана. Требует онлайн-модель. */
+    fun startPlanQuery() {
+        if (!(CloudAi.isConfigured(this) && Net.isOnline(this))) {
+            VoiceAccessibilityService.instance?.showStatus("📝 Для секретаря нужны онлайн-модель и интернет")
+            speak("Для планирования нужна онлайн-модель и интернет. Включите её в настройках.")
+            return
+        }
+        planning = true
+        aiListening = true
+        aiAsk = false
+        VoiceAccessibilityService.instance?.showStatus("📝 Слушаю план… говорите, что запланировать")
+        Logger.log("SEC", "Захват плана")
+        restartListening()   // свободное распознавание
+        resetIdle()
+    }
+
+    private fun handlePlan(text: String) {
+        if (text.isBlank()) { restartListening(); resetIdle(); return }
+        aiThinking = true
+        handler.removeCallbacks(idleRunnable)
+        VoiceAccessibilityService.instance?.showStatus("📝 Обрабатываю план…")
+        Logger.log("SEC", "План: '$text'")
+        Thread {
+            val p = Secretary.plan(this, text)
+            val conflict = if (p.ok && !p.allDay) {
+                val busy = CalendarReader.busyBetween(this, p.startMillis, p.startMillis + p.durationMin * 60_000L)
+                if (busy.isNotEmpty()) "Внимание: в это время уже есть — ${busy.joinToString(", ")}. " else ""
+            } else ""
+            post {
+                aiThinking = false
+                restartListening(); resetIdle()   // вернуть Vosk для «да/нет»
+                if (!p.ok) {
+                    speak("Не получилось: ${p.error}. Повторите по-другому.")
+                    VoiceAccessibilityService.instance?.showStatus("Не понял план: ${p.error}")
+                } else {
+                    pendingPlan = p
+                    val card = Secretary.confirmPhrase(p).removeSuffix(" Скажите да или нет.")
+                    VoiceAccessibilityService.instance?.showStatusHold("$conflict$card\nСкажите «да» или «нет»", 7, 31000)
+                    speak(conflict + Secretary.confirmPhrase(p))
+                    handler.postDelayed({ if (pendingPlan != null) { pendingPlan = null; Logger.log("SEC", "Подтверждение плана истекло") } }, 30000)
+                }
+            }
+        }.start()
+    }
+
+    private fun commitPlan(p: PlanResult) {
+        VoiceAccessibilityService.instance?.showStatus("📝 Записываю…")
+        Thread {
+            val ok = CalendarWriter.create(this, p.title, p.startMillis, p.durationMin, p.reminderMin, Secretary.description(p), p.allDay)
+            val m = Secretary.mem(this)
+            m.addTask(Task(java.util.UUID.randomUUID().toString(), p.title, p.person, p.project, p.startMillis, p.reminderMin, p.note, "open", System.currentTimeMillis()))
+            m.log("Запланировано: ${p.title}; проект=${p.project}; с=${p.person}; время=${p.startMillis}")
+            post {
+                if (ok) { speak("Готово, запланировал"); VoiceAccessibilityService.instance?.showStatus("✅ ${p.title}") }
+                else {
+                    speak("Сохранил в задачи, но в календарь записать не смог. Дайте доступ к календарю в настройках секретаря.")
+                    VoiceAccessibilityService.instance?.showStatus("Задача сохранена; календарь недоступен")
+                }
+                restartListening(); resetIdle()
+            }
+        }.start()
+    }
+
+    private fun speakTasks() {
+        val t = Secretary.mem(this).openTasks()
+        if (t.isEmpty()) { speak("Открытых задач нет"); VoiceAccessibilityService.instance?.showStatus("Задач нет"); return }
+        val df = java.text.SimpleDateFormat("d MMMM HH:mm", java.util.Locale("ru"))
+        val spoken = t.take(7).joinToString(". ") { tk ->
+            tk.title + if (tk.dueMillis > 0) " — " + df.format(java.util.Date(tk.dueMillis)) else ""
+        }
+        speak("Задачи: $spoken")
+        val lines = t.take(8).joinToString("\n") { tk ->
+            "• ${tk.title}" + if (tk.dueMillis > 0) " (${df.format(java.util.Date(tk.dueMillis))})" else ""
+        }
+        VoiceAccessibilityService.instance?.showStatusHold("Задачи:\n$lines", 10, 15000)
+    }
+
+    /** Старт свободного захвата вопроса к памяти. */
+    fun startQuery() {
+        querying = true
+        aiListening = true
+        aiAsk = false
+        VoiceAccessibilityService.instance?.showStatus("📋 Слушаю вопрос по делам…")
+        Logger.log("SEC", "Захват вопроса к памяти")
+        restartListening()
+        resetIdle()
+    }
+
+    private fun speakBriefing() {
+        aiThinking = true
+        handler.removeCallbacks(idleRunnable)
+        VoiceAccessibilityService.instance?.showStatus("📋 Готовлю сводку…")
+        Thread {
+            val text = Secretary.briefing(this)
+            post {
+                aiThinking = false
+                speak(text)
+                VoiceAccessibilityService.instance?.showStatusHold(text, 10, 25000)
+                restartListening(); resetIdle()
+            }
+        }.start()
+    }
+
+    private fun handleQuery(question: String) {
+        if (question.isBlank()) { restartListening(); resetIdle(); return }
+        aiThinking = true
+        handler.removeCallbacks(idleRunnable)
+        VoiceAccessibilityService.instance?.showStatus("📋 Смотрю в памяти…")
+        Logger.log("SEC", "Вопрос: '$question'")
+        Thread {
+            val ans = Secretary.answer(this, question)
+            post {
+                aiThinking = false
+                speak(ans)
+                VoiceAccessibilityService.instance?.showStatusHold(ans, 8, 20000)
+                restartListening(); resetIdle()
+            }
+        }.start()
+    }
+
     override fun onResult(hypothesis: String?) {
         val raw = hypothesis?.let { JSONObject(it).optString("text") } ?: return
         val text = normalize(raw.replace("[unk]", " "))
@@ -982,12 +1107,16 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 text.contains("хватит") || text.contains("закончили") || text.contains("достаточно") ||
                 text.contains("конец разговора") || text.contains("спасибо хватит")
             if (exit) {
-                aiListening = false; aiDialog = false
+                aiListening = false; aiDialog = false; planning = false; querying = false
                 VoiceAccessibilityService.instance?.showStatus(stateText())
                 restartListening(); return
             }
             aiListening = false
-            handleAi(aiAsk, text.trim())
+            when {
+                planning -> { planning = false; handlePlan(text.trim()) }
+                querying -> { querying = false; handleQuery(text.trim()) }
+                else -> handleAi(aiAsk, text.trim())
+            }
             return
         }
 
@@ -1176,6 +1305,26 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 else -> { pendingCall = null }  // иначе сбрасываем и обрабатываем как обычную команду
             }
         }
+        // Ожидание подтверждения плана секретаря
+        pendingPlan?.let { p ->
+            when {
+                text.contains("да") || text.contains("давай") || text.contains("подтвержда") ||
+                    text.contains("ага") || text.contains("верно") || text.contains("планируй") -> {
+                    pendingPlan = null
+                    VoiceAccessibilityService.instance?.releaseStatusHold()
+                    Logger.log("SEC", "План подтверждён: ${p.title}")
+                    commitPlan(p)
+                    return
+                }
+                text.contains("нет") || text.contains("отмена") || text.contains("стоп") || text.contains("не надо") -> {
+                    pendingPlan = null
+                    VoiceAccessibilityService.instance?.releaseStatusHold()
+                    speak("Отменено"); VoiceAccessibilityService.instance?.showStatus("План отменён")
+                    return
+                }
+                else -> { return }   // ждём «да»/«нет»
+            }
+        }
         // Ожидание выбора контакта из нескольких совпадений
         pendingContactChoice?.let { list ->
             when {
@@ -1262,6 +1411,26 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             return
         }
         lastCmdText = text
+
+        // Секретарь: планирование и задачи
+        run {
+            val planTriggers = listOf("запланируй", "запланировать", "назначь", "назначить",
+                "добавь встречу", "добавь событие", "поставь встречу", "запиши план", "планирую", "напомни", "напомнить")
+            val taskTriggers = listOf("мои задачи", "список задач", "какие задачи", "что в задачах", "задачи на сегодня")
+            val queryTriggers = listOf("что по", "что с", "статус по", "как дела по", "что у нас по",
+                "напомни про", "напомни что", "справк", "по делам", "что известно")
+            val briefTriggers = listOf("брифинг", "сводка", "сводку", "план на день", "доброе утро", "что на сегодня")
+            when {
+                briefTriggers.any { text.contains(it) } -> { speakBriefing(); return }
+                taskTriggers.any { text.contains(it) } || text.trim() == "задачи" -> { speakTasks(); return }
+                planTriggers.any { text.contains(it) } -> { startPlanQuery(); return }
+                queryTriggers.any { text.contains(it) } -> {
+                    val rest = afterAny(text, queryTriggers)
+                    if (rest.length >= 3) handleQuery(text) else startQuery()
+                    return
+                }
+            }
+        }
 
         // ИИ-помощник: ловим здесь, чтобы текст ПОСЛЕ триггера не терялся (запрос одной фразой),
         // плюс режим диалога «поговорим … хватит».

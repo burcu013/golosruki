@@ -12,7 +12,8 @@ data class PersonalConfig(
     val customApps: Map<String, String> = emptyMap(),  // своя фраза -> package
     val customGestures: Map<String, String> = emptyMap(),  // своё слово -> JSON жеста
     val sosPin: String = "",               // подтверждение для SOS
-    val contactNames: List<String> = emptyList()  // токены имён для грамматики (телефонная книга)
+    val contactNames: List<String> = emptyList(),  // токены имён для грамматики (телефонная книга)
+    val secretaryTokens: List<String> = emptyList()  // токены проектов/людей секретаря для грамматики
 ) {
     companion object {
         fun load(context: Context): PersonalConfig {
@@ -26,7 +27,11 @@ data class PersonalConfig(
             val customGestures = GestureStore.getCustomGestures(context)
             val sosPin = SettingsStore.getSosPin(context).lowercase().trim()
             val contactNames = Contacts.nameTokens(context)
-            return PersonalConfig(contacts, asset.apps, sosNum, sosTxt, customApps, customGestures, sosPin, contactNames)
+            val secMem = Secretary.mem(context)
+            val secretaryTokens = (secMem.projects() + secMem.people())
+                .flatMap { it.split(" ", "-") }.map { it.trim() }
+                .filter { it.length >= 3 }.distinct().take(150)
+            return PersonalConfig(contacts, asset.apps, sosNum, sosTxt, customApps, customGestures, sosPin, contactNames, secretaryTokens)
         }
 
         private fun loadAsset(context: Context): PersonalConfig {

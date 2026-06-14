@@ -329,6 +329,24 @@ class SettingsActivity : ComponentActivity() {
         })
         col.addView(ctc)
 
+        // Секретарь
+        val sec = UiKit.card(this)
+        sec.addView(UiKit.sectionHeader(this, "Секретарь"))
+        sec.addView(UiKit.body(this, "Планирование голосом: «Иван запланируй …» — скажите дело, с кем, по какому проекту и когда. Иван разберёт, переспросит и запишет в календарь с напоминанием. «Иван задачи» — список задач. Нужны онлайн-модель и интернет."))
+        sec.addView(UiKit.button(this, "📅 Дать доступ к записи в календарь") {
+            androidx.core.app.ActivityCompat.requestPermissions(
+                this, arrayOf(android.Manifest.permission.WRITE_CALENDAR, android.Manifest.permission.READ_CALENDAR), 7013)
+        })
+        sec.addView(UiKit.button(this, "⬆️ Экспорт памяти секретаря") {
+            runCatching {
+                val json = Secretary.mem(this).exportJson()
+                val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, json)
+                startActivity(Intent.createChooser(send, "Память секретаря"))
+            }
+        })
+        sec.addView(UiKit.body(this, "Память хранится локально (JSON). Экспорт — для будущего переноса на Джарвис-сервер."))
+        col.addView(sec)
+
         // --- Клавиатура ГолосРуки (IME) ---
         val kbc = UiKit.card(this)
         kbc.addView(UiKit.sectionHeader(this, "⌨️ Диктовка везде"))

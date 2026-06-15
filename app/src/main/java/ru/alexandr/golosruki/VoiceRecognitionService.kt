@@ -1103,9 +1103,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         // чтобы вопрос всегда ловился, даже когда играет видео или активен медиа-режим.
         if (aiListening) {
             if (text.isBlank()) { resetIdle(); return }
-            val exit = text.contains("стоп") || text.contains("отмена") || text.contains(wakeWord) ||
-                text.contains("хватит") || text.contains("закончили") || text.contains("достаточно") ||
+            val stopExit = text.contains("стоп") || text.contains("отмена") || text.contains("хватит") ||
+                text.contains("закончили") || text.contains("достаточно") ||
                 text.contains("конец разговора") || text.contains("спасибо хватит")
+            // В режиме плана/запроса «Иван» внутри текста (напр. «встреча с Иваном») НЕ выход — только стоп-слова.
+            val exit = stopExit || (!planning && !querying && text.contains(wakeWord))
             if (exit) {
                 aiListening = false; aiDialog = false; planning = false; querying = false
                 VoiceAccessibilityService.instance?.showStatus(stateText())
@@ -1309,7 +1311,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         pendingPlan?.let { p ->
             when {
                 text.contains("да") || text.contains("давай") || text.contains("подтвержда") ||
-                    text.contains("ага") || text.contains("верно") || text.contains("планируй") -> {
+                    text.contains("ага") || text.contains("верно") -> {
                     pendingPlan = null
                     VoiceAccessibilityService.instance?.releaseStatusHold()
                     Logger.log("SEC", "План подтверждён: ${p.title}")
@@ -1368,6 +1370,19 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 else -> { pendingGestureCalib = false }  // иначе сбрасываем и обрабатываем как обычную команду
             }
         }
+        // Секретарь: планирование/брифинг/задачи — РАНЬШЕ погоды/календаря («запланируй» содержит «план»)
+        run {
+            val planTriggers = listOf("запланируй", "запланировать", "назначь", "назначить",
+                "добавь встречу", "добавь событие", "поставь встречу", "запиши план", "планирую", "напомни", "напомнить")
+            val taskTriggers = listOf("мои задачи", "список задач", "какие задачи", "что в задачах", "задачи на сегодня")
+            val briefTriggers = listOf("брифинг", "сводка", "сводку", "план на день", "доброе утро", "что на сегодня")
+            when {
+                planTriggers.any { text.contains(it) } -> { startPlanQuery(); return }
+                briefTriggers.any { text.contains(it) } -> { speakBriefing(); return }
+                taskTriggers.any { text.contains(it) } || text.trim() == "задачи" -> { speakTasks(); return }
+                else -> {}
+            }
+        }
         if (text.contains("погод")) {
             Logger.log("CMD", "Погода")
             resetIdle()
@@ -1394,11 +1409,22 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             val dayWord = text.contains("сегодня") || text.contains("завтра")
             val dateTimeQ = text.contains("числ") || text.contains("врем") || text.contains("час") ||
                 text.contains("погод") || text.contains("недел") || text.contains("дата")
-            if (text.contains("план") || text.contains("календар") || text.contains("расписани") ||
+            if ((text.contains("план") && !text.contains("заплан") && !text.contains("планир")) ||
+                text.contains("календар") || text.contains("расписани") ||
                 (dayWord && !dateTimeQ)) {
                 val off = if (text.contains("завтра")) 1 else 0
                 Logger.log("CMD", "Календарь (день +$off)")
                 speak(CalendarReader.daySummary(this, off))
+                return
+            }
+        }
+        // Секретарь: запрос к памяти — ПОСЛЕ погоды/календаря/уведомлений, чтобы не перехватывать «что нового/сегодня/погода»
+        run {
+            val queryTriggers = listOf("что по", "статус по", "как дела по", "что у нас по",
+                "справк", "по делам", "что известно")
+            if (queryTriggers.any { text.contains(it) }) {
+                val rest = afterAny(text, queryTriggers)
+                if (rest.length >= 3) handleQuery(text) else startQuery()
                 return
             }
         }
@@ -1411,27 +1437,6 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             return
         }
         lastCmdText = text
-
-        // Секретарь: планирование и задачи
-        run {
-            val planTriggers = listOf("запланируй", "запланировать", "назначь", "назначить",
-                "добавь встречу", "добавь событие", "поставь встречу", "запиши план", "планирую", "напомни", "напомнить")
-            val taskTriggers = listOf("мои задачи", "список задач", "какие задачи", "что в задачах", "задачи на сегодня")
-            val queryTriggers = listOf("что по", "что с", "статус по", "как дела по", "что у нас по",
-                "напомни про", "напомни что", "справк", "по делам", "что известно")
-            val briefTriggers = listOf("брифинг", "сводка", "сводку", "план на день", "доброе утро", "что на сегодня")
-            when {
-                briefTriggers.any { text.contains(it) } -> { speakBriefing(); return }
-                taskTriggers.any { text.contains(it) } || text.trim() == "задачи" -> { speakTasks(); return }
-                planTriggers.any { text.contains(it) } -> { startPlanQuery(); return }
-                queryTriggers.any { text.contains(it) } -> {
-                    val rest = afterAny(text, queryTriggers)
-                    if (rest.length >= 3) handleQuery(text) else startQuery()
-                    return
-                }
-                else -> {}
-            }
-        }
 
         // ИИ-помощник: ловим здесь, чтобы текст ПОСЛЕ триггера не терялся (запрос одной фразой),
         // плюс режим диалога «поговорим … хватит».

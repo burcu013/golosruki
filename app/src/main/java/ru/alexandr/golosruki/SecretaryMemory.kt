@@ -29,6 +29,7 @@ interface SecretaryMemory {
     fun searchLog(query: String, limit: Int): List<String>  // записи лога по ключевым словам
     fun recentLog(limit: Int): List<String>
     fun completeTask(id: String)
+    fun clearDone(): Int
     fun people(): List<String>
     fun projects(): List<String>
     fun learn(project: String?, person: String?)   // запомнить новый проект/человека
@@ -64,6 +65,7 @@ class LocalMemory(private val ctx: Context) : SecretaryMemory {
     }
 
     override fun openTasks(): List<Task> {
+        pruneDone(7L * 24 * 60 * 60 * 1000)   // авто-удаление выполненных старше 7 дней
         val a = arr("tasks"); val out = ArrayList<Task>()
         for (i in 0 until a.length()) {
             val o = a.getJSONObject(i)
@@ -79,8 +81,35 @@ class LocalMemory(private val ctx: Context) : SecretaryMemory {
         val a = arr("tasks")
         for (i in 0 until a.length()) {
             val o = a.getJSONObject(i)
-            if (o.optString("id") == id) { o.put("status", "done"); save(); return }
+            if (o.optString("id") == id) {
+                o.put("status", "done"); o.put("done_at", System.currentTimeMillis()); save(); return
+            }
         }
+    }
+
+    /** Удаляет выполненные задачи старше maxAgeMs (по времени выполнения). */
+    private fun pruneDone(maxAgeMs: Long) {
+        val a = arr("tasks"); val keep = JSONArray(); var changed = false
+        val now = System.currentTimeMillis()
+        for (i in 0 until a.length()) {
+            val o = a.getJSONObject(i)
+            val done = o.optString("status", "open") == "done"
+            val da = o.optLong("done_at", 0)
+            if (done && da > 0 && now - da > maxAgeMs) { changed = true; continue }
+            keep.put(o)
+        }
+        if (changed) { root.put("tasks", keep); save() }
+    }
+
+    /** Немедленно удаляет все выполненные задачи. Возвращает количество. */
+    override fun clearDone(): Int {
+        val a = arr("tasks"); val keep = JSONArray(); var removed = 0
+        for (i in 0 until a.length()) {
+            val o = a.getJSONObject(i)
+            if (o.optString("status", "open") == "done") removed++ else keep.put(o)
+        }
+        if (removed > 0) { root.put("tasks", keep); save() }
+        return removed
     }
 
     private val stop = setOf("что", "как", "где", "когда", "кто", "это", "мне", "нас", "про",

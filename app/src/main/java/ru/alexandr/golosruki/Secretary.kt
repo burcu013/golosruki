@@ -67,6 +67,8 @@ object Secretary {
             return PlanResult(false, title, person, project, note, duration, reminder, 0, false, "не понял дату")
 
         val allDay = time.isBlank() || !time.matches(Regex("\\d{1,2}:\\d{2}"))
+        // Напоминание по умолчанию, если не названо: за 30 мин (со временем) / заранее (на весь день).
+        val reminderFinal = if (reminder > 0) reminder else if (allDay) 540 else 30
         val cal = Calendar.getInstance()
         try {
             val d = SimpleDateFormat("yyyy-MM-dd", ru).parse(date) ?: throw IllegalArgumentException()
@@ -82,7 +84,7 @@ object Secretary {
         } catch (e: Exception) {
             return PlanResult(false, title, person, project, note, duration, reminder, 0, false, "не понял дату")
         }
-        return PlanResult(true, title, person, project, note, duration, reminder, cal.timeInMillis, allDay)
+        return PlanResult(true, title, person, project, note, duration, reminderFinal, cal.timeInMillis, allDay)
     }
 
     /** Ответ на вопрос по памяти (этап B). Онлайн — LLM по релевантному срезу; офлайн — локальный список. */
@@ -131,7 +133,10 @@ object Secretary {
         if (p.person.isNotBlank()) sb.append(" с ${p.person}")
         if (p.project.isNotBlank()) sb.append(" по ${p.project}")
         sb.append(" — $whenStr")
-        if (p.reminderMin > 0) sb.append(", напомню за ${p.reminderMin} минут")
+        if (p.reminderMin > 0) {
+            val r = if (p.reminderMin % 60 == 0) "${p.reminderMin / 60} ч" else "${p.reminderMin} мин"
+            sb.append(", напомню за $r")
+        }
         sb.append(". Скажите да или нет.")
         return sb.toString()
     }

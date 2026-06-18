@@ -13,6 +13,7 @@ class BootReceiver : BroadcastReceiver() {
             a == "android.intent.action.QUICKBOOT_POWERON") {
             runCatching {
                 val i = Intent(context, VoiceRecognitionService::class.java)
+                    .setAction(ReminderScheduler.ACTION_REARM)   // полный старт + перевзвод напоминаний/брифинга
                 if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(i) else context.startService(i)
             }
         }

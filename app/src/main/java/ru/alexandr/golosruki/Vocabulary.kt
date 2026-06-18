@@ -59,7 +59,9 @@ object Vocabulary {
         "запланируй", "запланировать", "назначь", "назначить", "поставь", "встречу", "событие",
         "запиши", "план", "планирую", "напомни", "напомнить", "задачи", "задача",
         "статус", "справка", "делам", "известно", "брифинг", "сводка", "сводку", "день",
-        "доброе", "утро", "что", "по", "как", "дела", "нас", "про"
+        "доброе", "утро", "что", "по", "как", "дела", "нас", "про",
+        "выполнено", "выполнена", "выполнил", "закрой", "закрыть", "задачу", "выполненные", "готова", "отметь",
+        "глубокий", "крепкий", "сон"
     )
 
     /** Строит JSON-грамматику с учётом слова активации, персональных имён и приложений. */
@@ -69,6 +71,7 @@ object Vocabulary {
         personal.contacts.keys.forEach { name -> name.split(" ").forEach { words.add(it) } }
         personal.contactNames.forEach { words.add(it) }
         personal.secretaryTokens.forEach { words.add(it) }
+        personal.deepSleepTokens.forEach { words.add(it) }
         personal.apps.keys.forEach { name -> name.split(" ").forEach { words.add(it) } }
         personal.customApps.keys.forEach { phrase -> phrase.split(" ").forEach { words.add(it) } }
         personal.customGestures.keys.forEach { phrase -> phrase.split(" ").forEach { words.add(it) } }

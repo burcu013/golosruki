@@ -38,6 +38,15 @@ class MainActivity : ComponentActivity() {
         setup.addView(UiKit.iconButton(this, "③  ▶ Запустить управление", R.drawable.btn_amber) { startVoice() })
         setup.addView(UiKit.iconButton(this, "🔁  Перезапустить Иван") { resetVoice() })
         setup.addView(UiKit.iconButton(this, "🔋  Не выключать в фоне (важно!)") { requestBattery() })
+        setup.addView(UiKit.iconButton(this, "🌙  Глубокий сон") {
+            if (!SettingsStore.getDeepSleepEnabled(this)) {
+                android.widget.Toast.makeText(this, "Сначала включите «Глубокий сон» в Настройках → Голос", android.widget.Toast.LENGTH_LONG).show()
+            } else {
+                val i = Intent(this, VoiceRecognitionService::class.java).setAction(VoiceRecognitionService.ACTION_DEEP_SLEEP)
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+                android.widget.Toast.makeText(this, "Глубокий сон. Выход — фразой: " + SettingsStore.getDeepSleepPhrase(this), android.widget.Toast.LENGTH_LONG).show()
+            }
+        })
         col.addView(setup)
 
         val nav = UiKit.card(this)
@@ -185,7 +194,7 @@ class MainActivity : ComponentActivity() {
         card.addView(UiKit.sectionHeader(this, "О приложении"))
         card.addView(UiKit.body(this, "ГолосРуки — голосовое управление смартфоном для людей с ограниченными возможностями."))
         card.addView(UiKit.body(this, "Офлайн-распознавание речи, без интернета и без передачи данных."))
-        card.addView(UiKit.body(this, "Версия 6.94 • Разработчик: Донбасс Реклама"))
+        card.addView(UiKit.body(this, "Версия 6.99 • Разработчик: Донбасс Реклама"))
         return card
     }
 

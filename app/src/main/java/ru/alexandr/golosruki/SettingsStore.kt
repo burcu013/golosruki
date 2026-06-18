@@ -179,6 +179,21 @@ object SettingsStore {
     fun getUseSystemContacts(ctx: Context): Boolean = p(ctx).getBoolean("use_sys_contacts", false)
     fun setUseSystemContacts(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("use_sys_contacts", v).apply()
 
+    // Утренний голосовой брифинг по расписанию.
+    fun getBriefingEnabled(ctx: Context): Boolean = p(ctx).getBoolean("briefing_enabled", false)
+    fun setBriefingEnabled(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("briefing_enabled", v).apply()
+    fun getBriefingHour(ctx: Context): Int = p(ctx).getInt("briefing_hour", 9)
+    fun setBriefingHour(ctx: Context, v: Int) = p(ctx).edit().putInt("briefing_hour", v).apply()
+    fun getBriefingMin(ctx: Context): Int = p(ctx).getInt("briefing_min", 0)
+    fun setBriefingMin(ctx: Context, v: Int) = p(ctx).edit().putInt("briefing_min", v).apply()
+
+    // Глубокий сон: режим, из которого можно выйти только точной фразой пробуждения.
+    fun getDeepSleepEnabled(ctx: Context): Boolean = p(ctx).getBoolean("deep_sleep_enabled", false)
+    fun setDeepSleepEnabled(ctx: Context, v: Boolean) = p(ctx).edit().putBoolean("deep_sleep_enabled", v).apply()
+    fun getDeepSleepPhrase(ctx: Context): String =
+        (p(ctx).getString("deep_sleep_phrase", "иван полный подъём") ?: "иван полный подъём").lowercase().trim()
+    fun setDeepSleepPhrase(ctx: Context, v: String) = p(ctx).edit().putString("deep_sleep_phrase", v.trim()).apply()
+
     // Калибровка кнопки записи: доли экрана (x,y в 0..1) по пакету приложения.
     fun getRecPointFrac(ctx: Context, pkg: String): Pair<Float, Float>? {
         if (pkg.isBlank()) return null

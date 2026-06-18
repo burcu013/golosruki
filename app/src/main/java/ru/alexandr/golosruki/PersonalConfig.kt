@@ -13,7 +13,8 @@ data class PersonalConfig(
     val customGestures: Map<String, String> = emptyMap(),  // своё слово -> JSON жеста
     val sosPin: String = "",               // подтверждение для SOS
     val contactNames: List<String> = emptyList(),  // токены имён для грамматики (телефонная книга)
-    val secretaryTokens: List<String> = emptyList()  // токены проектов/людей секретаря для грамматики
+    val secretaryTokens: List<String> = emptyList(),  // токены проектов/людей секретаря для грамматики
+    val deepSleepTokens: List<String> = emptyList()    // слова фразы выхода из глубокого сна
 ) {
     companion object {
         fun load(context: Context): PersonalConfig {
@@ -31,7 +32,9 @@ data class PersonalConfig(
             val secretaryTokens = (secMem.projects() + secMem.people())
                 .flatMap { it.split(" ", "-") }.map { it.trim() }
                 .filter { it.length >= 3 }.distinct().take(150)
-            return PersonalConfig(contacts, asset.apps, sosNum, sosTxt, customApps, customGestures, sosPin, contactNames, secretaryTokens)
+            val deepSleepTokens = SettingsStore.getDeepSleepPhrase(context)
+                .split(" ", "-").map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            return PersonalConfig(contacts, asset.apps, sosNum, sosTxt, customApps, customGestures, sosPin, contactNames, secretaryTokens, deepSleepTokens)
         }
 
         private fun loadAsset(context: Context): PersonalConfig {

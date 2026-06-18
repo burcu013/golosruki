@@ -54,30 +54,38 @@ class OverlayView(context: Context) : View(context) {
 
     fun setTargets(list: List<Target>, grid: Boolean) { targets = list; gridMode = grid; invalidate() }
     fun clearTargets() { targets = emptyList(); gridMode = false; invalidate() }
-    fun setStatus(text: String, maxLines: Int = 1) { status = text; statusMaxLines = maxLines.coerceIn(1, 5); invalidate() }
+    fun setStatus(text: String, maxLines: Int = 1) { status = text; statusMaxLines = maxLines.coerceIn(1, 30); invalidate() }
     fun setIcon(i: Icon) { icon = i; invalidate() }
 
-    private fun wrap(text: String, maxW: Float, maxLines: Int): List<String> {
-        if (maxLines <= 1) return listOf(ellipsize(text, maxW))
-        val words = text.split(" ")
-        val lines = ArrayList<String>()
-        var cur = StringBuilder()
-        for (w in words) {
-            val candidate = if (cur.isEmpty()) w else "$cur $w"
-            if (statusText.measureText(candidate) <= maxW) {
-                cur = StringBuilder(candidate)
-            } else {
-                if (cur.isNotEmpty()) lines.add(cur.toString())
-                cur = StringBuilder(w)
-                if (lines.size == maxLines - 1) break
+    /** Перенос строк: учитывает явные \n (абзацы/пункты), затем переносит по словам. */
+    private fun wrapLines(text: String, maxW: Float, maxLines: Int): List<String> {
+        if (maxLines <= 1) return listOf(ellipsize(text.replace("\n", " "), maxW))
+        val out = ArrayList<String>()
+        var truncated = false
+        loop@ for (para in text.split("\n")) {
+            if (out.size >= maxLines) { truncated = true; break }
+            if (para.isBlank()) { out.add(""); continue }
+            val words = para.split(Regex("\\s+")).filter { it.isNotEmpty() }
+            var cur = StringBuilder()
+            for (w in words) {
+                val cand = if (cur.isEmpty()) w else "$cur $w"
+                if (statusText.measureText(cand) <= maxW) { cur = StringBuilder(cand); continue }
+                if (cur.isNotEmpty()) {
+                    out.add(cur.toString()); cur = StringBuilder()
+                    if (out.size >= maxLines) { truncated = true; break@loop }
+                }
+                if (statusText.measureText(w) > maxW) {
+                    out.add(ellipsize(w, maxW))
+                    if (out.size >= maxLines) { truncated = true; break@loop }
+                } else cur = StringBuilder(w)
+            }
+            if (cur.isNotEmpty()) {
+                if (out.size >= maxLines) { truncated = true; break }
+                out.add(cur.toString())
             }
         }
-        if (lines.size < maxLines && cur.isNotEmpty()) lines.add(cur.toString())
-        val joined = lines.joinToString(" ")
-        if (joined.length < text.length && lines.isNotEmpty()) {
-            lines[lines.size - 1] = ellipsize(lines.last() + " …", maxW)
-        }
-        return lines
+        if (truncated && out.isNotEmpty()) out[out.size - 1] = ellipsize(out.last().trimEnd() + " …", maxW)
+        return out
     }
 
     private fun ellipsize(s: String, maxW: Float): String {
@@ -129,16 +137,23 @@ class OverlayView(context: Context) : View(context) {
         if (status.isNotEmpty()) {
             val marginTop = 18f; val marginLeft = 16f
             val padX = 30f; val padY = 16f; val iconGap = 26f
+            // длинные ответы — мельче шрифт, чтобы влезало больше
+            statusText.textSize = if (statusMaxLines > 3) 30f else 38f
             val maxTextW = width - marginLeft * 2 - padX * 2 - iconGap
-            val lines = wrap(status, maxTextW, statusMaxLines)
             val fm = statusText.fontMetrics
             val lineH = (fm.descent - fm.ascent)
-            val widest = lines.maxOf { statusText.measureText(it) }
+            // сколько строк помещается по высоте экрана (с запасом снизу)
+            val avail = (((height - marginTop * 2 - padY * 2) / lineH).toInt()).coerceAtLeast(1)
+            val effMax = minOf(statusMaxLines, avail)
+            val lines = wrapLines(status, maxTextW, effMax)
+            val widest = lines.maxOf { statusText.measureText(it) }.coerceAtLeast(statusText.measureText("    "))
             val left = marginLeft; val top = marginTop
             val right = left + iconGap + widest + padX * 2
             val bottom = top + lineH * lines.size + padY * 2
             canvas.drawRoundRect(RectF(left, top, right, bottom), 30f, 30f, statusBg)
-            drawIcon(canvas, left + padX, (top + bottom) / 2f)
+            // значок: для многострочного — у верхней строки, иначе по центру
+            val iconY = if (lines.size > 2) top + padY - fm.ascent - lineH * 0.15f else (top + bottom) / 2f
+            drawIcon(canvas, left + padX, iconY)
             var ty = top + padY - fm.ascent
             for (ln in lines) { canvas.drawText(ln, left + padX + iconGap, ty, statusText); ty += lineH }
         }

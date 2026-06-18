@@ -36,6 +36,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     private var wakeWord = "иван"
     private var idleMs = 30_000L
+    @Volatile private var deepSleep = false                 // глубокий сон — выход только точной фразой
+    private var deepSleepEnabled = false
+    private var deepSleepPhrase = "иван полный подъём"
     private var ignoreMedia = true
     private var vibrateOnWake = true
     private var keepScreen = true
@@ -248,6 +251,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var pendingCall: Pair<String, String>? = null   // имя -> номер (ожидает «да»)
     private var pendingContactChoice: List<Contacts.C>? = null   // несколько совпадений — ждём номер выбора
     private var pendingPlan: PlanResult? = null   // разобранный план — ждёт подтверждения «да/нет»
+    private var pendingTaskDone: List<Task>? = null   // выбор задачи для завершения (по номеру)
     private var pendingGestureCalib = false                  // ожидает подтверждения записи жеста
 
     private val idleRunnable = Runnable {
@@ -264,6 +268,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         const val ACTION_RESET = "ru.alexandr.golosruki.RESET"
         const val ACTION_RELOAD = "ru.alexandr.golosruki.RELOAD"   // перезагрузить модель (после смены пакета)
         const val ACTION_APPLY = "ru.alexandr.golosruki.APPLY"     // применить настройки на лету (без пересоздания службы)
+        const val ACTION_DEEP_SLEEP = "ru.alexandr.golosruki.DEEP_SLEEP"   // войти в глубокий сон (кнопка/уведомление)
         @Volatile var instance: VoiceRecognitionService? = null
         @Volatile private var paused = false
         fun setPaused(p: Boolean) {
@@ -279,8 +284,29 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             ACTION_RESET -> resetState()
             ACTION_RELOAD -> reloadModel()
             ACTION_APPLY -> applySettings()
+            ACTION_DEEP_SLEEP -> enterDeepSleep()
+            ReminderScheduler.ACTION_REMINDER -> intent.getStringExtra("text")?.let { speakReminderSoon(it, 0) }
+            ReminderScheduler.ACTION_BRIEFING -> {
+                handler.postDelayed({ speakBriefing() }, 1500)   // дать TTS/службе подняться, если старт «холодный»
+                ReminderScheduler.rearmBriefing(this)            // перевзвести на следующий день
+            }
+            ReminderScheduler.ACTION_REARM -> ReminderScheduler.rearmAll(this)
         }
         return START_STICKY
+    }
+
+    /** Озвучить напоминание; если TTS ещё не готов (холодный старт по будильнику) — подождать и повторить. */
+    private fun speakReminderSoon(text: String, attempt: Int) {
+        if (ttsReady && ttsEnabled) {
+            VoiceAccessibilityService.instance?.showStatus("🔔 $text")
+            speak(text)
+            Logger.log("SEC", "Напоминание озвучено: $text")
+        } else if (attempt < 12) {
+            handler.postDelayed({ speakReminderSoon(text, attempt + 1) }, 600)
+        } else {
+            VoiceAccessibilityService.instance?.showStatus("🔔 $text")
+            Logger.log("SEC", "Напоминание без озвучки (TTS недоступен): $text")
+        }
     }
 
     /** Применить настройки на лету: перечитать конфиг и перезапустить распознавание.
@@ -290,6 +316,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         wakeWord = SettingsStore.getWake(this)
         idleMs = SettingsStore.getIdle(this) * 1000L
         ignoreMedia = SettingsStore.getIgnoreMedia(this)
+        deepSleepEnabled = SettingsStore.getDeepSleepEnabled(this)
+        deepSleepPhrase = SettingsStore.getDeepSleepPhrase(this)
         vibrateOnWake = SettingsStore.getVibrate(this)
         keepScreen = SettingsStore.getKeepScreen(this)
         mediaCode = SettingsStore.getMediaCode(this).lowercase().trim()
@@ -343,6 +371,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         wakeWord = SettingsStore.getWake(this)
         idleMs = SettingsStore.getIdle(this) * 1000L
         ignoreMedia = SettingsStore.getIgnoreMedia(this)
+        deepSleepEnabled = SettingsStore.getDeepSleepEnabled(this)
+        deepSleepPhrase = SettingsStore.getDeepSleepPhrase(this)
         vibrateOnWake = SettingsStore.getVibrate(this)
         keepScreen = SettingsStore.getKeepScreen(this)
         mediaCode = SettingsStore.getMediaCode(this).lowercase().trim()
@@ -374,7 +404,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 override fun onDone(id: String?) {
                     val cb = afterSpeak
                     if (cb != null) { afterSpeak = null; handler.post { cb() } }
-                    else { scheduleResume(500); post { VoiceAccessibilityService.instance?.releaseStatusHold() } }
+                    else { scheduleResume(500); post { if (!hasPendingHold()) VoiceAccessibilityService.instance?.releaseStatusHold() } }
                 }
                 @Deprecated("deprecated") override fun onError(id: String?) { scheduleResume(500) }
             })
@@ -448,28 +478,79 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.postDelayed(resumeAfterSpeak, delay)
     }
 
+    /** Активно ли окно, ожидающее выбора/подтверждения голосом (его нельзя гасить по окончании речи). */
+    private fun hasPendingHold(): Boolean =
+        pendingContactChoice != null || pendingPlan != null || pendingTaskDone != null
+
     /** Прервать текущую озвучку голосом и вернуться к слушанию. */
     private fun stopSpeaking() {
         runCatching { tts?.stop() }
         handler.removeCallbacks(resumeAfterSpeak)
         isSpeaking = false
         post {
-            VoiceAccessibilityService.instance?.releaseStatusHold()
-            VoiceAccessibilityService.instance?.showStatus(stateText())
+            if (!hasPendingHold()) {
+                VoiceAccessibilityService.instance?.releaseStatusHold()
+                VoiceAccessibilityService.instance?.showStatus(stateText())
+            }
         }
         resetIdle()
     }
 
     fun speak(text: String) {
         if (!ttsEnabled || !ttsReady) return
-        // Микрофон НЕ глушим: во время речи слушаем, но в onResult реагируем только на
-        // «Иван + хватит/стоп» (прерывание). Остальное в это время игнорируется (анти-петля).
         isSpeaking = true
         runCatching {
-            tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki")
+            tts?.speak(cleanForSpeech(text), android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki")
         }
         // страховка, если движок не сообщит об окончании
         scheduleResume(1800L + text.length * 90L)
+    }
+
+    /** Убирает markdown, чтобы синтезатор не читал «звёздочка/решётка»; заголовки/жирный → пауза. */
+    /** Готовит текст к озвучке: убирает разметку и расставляет паузы/интонацию (для человекоподобной речи). */
+    private fun cleanForSpeech(s: String): String {
+        var t = s
+        // разметка off
+        t = t.replace(Regex("(?m)^\\s*#{1,6}\\s*"), "")
+        t = t.replace(Regex("\\*\\*(.+?)\\*\\*"), "$1. ")            // **жирный/заголовок** → текст + пауза
+        t = t.replace(Regex("__(.+?)__"), "$1. ")
+        t = t.replace(Regex("\\[(.+?)\\]\\(.+?\\)"), "$1")           // [текст](ссылка) → текст
+        t = t.replace(Regex("[*_`#>]"), "")
+        // нумерованные пункты: число не читаем, ставим паузу (иначе робот говорит «один… два…»)
+        t = t.replace(Regex("(?m)^\\s*\\d{1,2}[.)]\\s+"), "")        // ведущая нумерация
+        t = t.replace(Regex("(?<=\\S)\\s+\\d{1,2}[.)]\\s+"), ". ")   // нумерация в строке → пауза
+        // маркеры списка → короткая пауза
+        t = t.replace(Regex("(?m)^\\s*[-–—•·]\\s+"), "")
+        t = t.replace(Regex("(?<=\\S)\\s+[-–—•·]\\s+"), ", ")
+        // переводы строк → паузы (абзац — длиннее, строка — короче)
+        t = t.replace(Regex("\\n{2,}"), ". ")
+        t = t.replace(Regex("\\n"), ", ")
+        // нормализация пауз
+        t = t.replace(Regex("\\.{3,}"), "…")                        // многоточие = естественная пауза
+        t = t.replace(Regex("\\s+([.!?,;:…])"), "$1")               // пробел перед знаком убрать
+        t = t.replace(Regex("([.!?,;:])(?=[.!?,;:])"), "")          // дубли пунктуации («. ,» → «,»? оставляем первый)
+        t = t.replace(Regex("[ \\t]{2,}"), " ")
+        return t.trim()
+    }
+
+    /** Готовит длинный ответ к ПОКАЗУ на экране: убирает разметку и расставляет переносы/отступы для читабельности. */
+    private fun formatForScreen(s: String): String {
+        var t = s.trim()
+        t = t.replace(Regex("(?m)^\\s*#{1,6}\\s*"), "")
+        t = t.replace(Regex("\\*\\*(.+?)\\*\\*"), "$1")
+        t = t.replace(Regex("__(.+?)__"), "$1")
+        t = t.replace(Regex("\\[(.+?)\\]\\(.+?\\)"), "$1")
+        t = t.replace(Regex("[*_`#>]"), "")
+        // нумерованные пункты — каждый с новой строки
+        t = t.replace(Regex("(?<=\\S) *(\\d{1,2})[.)]\\s+"), "\n$1. ")
+        // маркеры списка — с новой строки и единым значком
+        t = t.replace(Regex("(?<=\\S) *[-–—•·]\\s+"), "\n• ")
+        t = t.replace(Regex("(?m)^\\s*[-–—•·]\\s+"), "• ")
+        // лишние пробелы и пустые строки
+        t = t.replace(Regex("[ \\t]{2,}"), " ")
+        t = t.replace(Regex("\\n{3,}"), "\n\n")
+        t = t.replace(Regex("(?m)^[ \\t]+"), "")
+        return t.trim()
     }
 
     /** Сказать фразу и затем (после окончания речи) выполнить действие. Используется для голосовых подсказок перед записью. */
@@ -497,6 +578,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     private fun stateText(): String = when {
+        deepSleep -> "🌙 Глубокий сон — скажите «${cap(deepSleepPhrase)}»"
         recordingVoice -> "🎙 Запись: «${cap(wakeWord)} отправь» или «${cap(wakeWord)} отмена»"
         aiThinking -> "🧠 Думаю…"
         aiListening -> if (aiAsk) "🧠 Слушаю вопрос — говорите" else "🧠 Что сформулировать — говорите"
@@ -537,14 +619,25 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         val resetAction = Notification.Action.Builder(
             android.R.drawable.ic_menu_rotate, "Перезапустить Иван", resetPi
         ).build()
-        return Notification.Builder(this, CHANNEL_ID)
+        val builder = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("ГолосРуки")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
             .setContentIntent(pi)
             .addAction(resetAction)
-            .build()
+        // Кнопка «Глубокий сон» в уведомлении — если функция включена.
+        if (deepSleepEnabled && !deepSleep) {
+            val dsIntent = Intent(this, VoiceRecognitionService::class.java).setAction(ACTION_DEEP_SLEEP)
+            val dsPi = if (Build.VERSION.SDK_INT >= 26)
+                android.app.PendingIntent.getForegroundService(this, 2, dsIntent,
+                    android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
+            else android.app.PendingIntent.getService(this, 2, dsIntent,
+                android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
+            @Suppress("DEPRECATION")
+            builder.addAction(Notification.Action.Builder(android.R.drawable.ic_lock_idle_lock, "🌙 Глубокий сон", dsPi).build())
+        }
+        return builder.build()
     }
 
     fun refreshNotification() {
@@ -687,8 +780,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             return
         }
         aiAsk = ask
-        // Облачное распознавание (Whisper), если настроено и есть интернет — иначе Vosk.
-        if (CloudStt.isConfigured(this) && Net.isOnline(this)) { startCloudCapture(ask); return }
+        // Вопрос/текст захватываем свободным офлайн-распознаванием (Vosk) — надёжно и без сети.
+        // (Облачный Whisper для диктовки вопроса отключён: на нестабильной сети он давал таймауты.)
         aiListening = true
         VoiceAccessibilityService.instance?.showStatus(stateText())
         Logger.log("AI", "Захват ${if (ask) "вопроса" else "текста"} для ИИ")
@@ -750,7 +843,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 val voice = AiProfile.load(this).voiceAnswers
                 // Статус с ответом держим до конца озвучки; без озвучки — по времени чтения.
                 val autoRelease = if (voice) 0L else estimateReadMs(answer)
-                VoiceAccessibilityService.instance?.showStatusHold("🧠 $answer", 5, autoRelease)
+                VoiceAccessibilityService.instance?.showStatusHold("🧠 " + formatForScreen(answer), 22, autoRelease)
                 if (voice) {
                     // Текст для вставки не зачитываем — он уже в поле; только подтверждаем.
                     speak(if (composedOk) "Сгенерировал текст" else answer)
@@ -833,6 +926,27 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         VoiceAccessibilityService.instance?.keepScreenOn(false)
         refreshNotification()
         Logger.log("REC", "Жест: микрофон уведён в сон")
+    }
+
+    /** Войти в глубокий сон (если разрешён). Выход — только точной фразой пробуждения. */
+    fun enterDeepSleep() {
+        if (!deepSleepEnabled) {
+            speak("Глубокий сон выключен в настройках.")
+            VoiceAccessibilityService.instance?.showStatus("Глубокий сон выключен в настройках")
+            return
+        }
+        handler.removeCallbacks(idleRunnable)
+        aiListening = false; aiDialog = false; planning = false; querying = false
+        pendingPlan = null; pendingTaskDone = null; pendingContactChoice = null; pendingCall = null
+        if (dictation) exitDictation()
+        deepSleep = true
+        state = State.ASLEEP
+        VoiceAccessibilityService.instance?.keepScreenOn(false)
+        refreshNotification()
+        VoiceAccessibilityService.instance?.releaseStatusHold()
+        VoiceAccessibilityService.instance?.showStatus("🌙 Глубокий сон — скажите «${cap(deepSleepPhrase)}»")
+        speak("Глубокий сон включён. Чтобы разбудить меня, скажите: $deepSleepPhrase")
+        Logger.log("REC", "Глубокий сон ВКЛ. Фраза выхода: '$deepSleepPhrase'")
     }
 
     /** Разрешение «позвони X»: поиск контактов → звонок (1), окно выбора (несколько) или захват имени голосом/подсказка (0). */
@@ -971,11 +1085,19 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     private fun commitPlan(p: PlanResult) {
         VoiceAccessibilityService.instance?.showStatus("📝 Записываю…")
+        val taskId = java.util.UUID.randomUUID().toString()
         Thread {
             val ok = CalendarWriter.create(this, p.title, p.startMillis, p.durationMin, p.reminderMin, Secretary.description(p), p.allDay)
             val m = Secretary.mem(this)
-            m.addTask(Task(java.util.UUID.randomUUID().toString(), p.title, p.person, p.project, p.startMillis, p.reminderMin, p.note, "open", System.currentTimeMillis()))
+            val task = Task(taskId, p.title, p.person, p.project, p.startMillis, p.reminderMin, p.note, "open", System.currentTimeMillis())
+            m.addTask(task)
             m.log("Запланировано: ${p.title}; проект=${p.project}; с=${p.person}; время=${p.startMillis}")
+            // Голосовое напоминание от Ивана (в дополнение к напоминанию календаря).
+            if (p.reminderMin > 0 && p.startMillis > 0) {
+                val at = p.startMillis - p.reminderMin * 60_000L
+                if (at > System.currentTimeMillis())
+                    ReminderScheduler.scheduleReminder(this, taskId.hashCode(), at, ReminderScheduler.reminderText(task))
+            }
             post {
                 if (ok) { speak("Готово, запланировал"); VoiceAccessibilityService.instance?.showStatus("✅ ${p.title}") }
                 else {
@@ -998,10 +1120,24 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         val lines = t.take(8).joinToString("\n") { tk ->
             "• ${tk.title}" + if (tk.dueMillis > 0) " (${df.format(java.util.Date(tk.dueMillis))})" else ""
         }
-        VoiceAccessibilityService.instance?.showStatusHold("Задачи:\n$lines", 10, 15000)
+        VoiceAccessibilityService.instance?.showStatusHold(formatForScreen("Задачи:\n$lines"), 22, 15000)
     }
 
     /** Старт свободного захвата вопроса к памяти. */
+    /** Завершение задачи: показываем открытые задачи нумерованным списком, ждём номер. */
+    private fun startTaskComplete() {
+        val tasks = Secretary.mem(this).openTasks()
+        if (tasks.isEmpty()) {
+            speak("Открытых задач нет"); VoiceAccessibilityService.instance?.showStatus("Задач нет"); return
+        }
+        val top = tasks.take(5)
+        pendingTaskDone = top
+        val lines = top.mapIndexed { i, t -> "${i + 1}. ${t.title}" }.joinToString("\n")
+        VoiceAccessibilityService.instance?.showStatusHold("Какую задачу закрыть?\n$lines\nСкажите номер или «отмена»", top.size + 3, 21000)
+        speak("Какую задачу закрыть? " + top.mapIndexed { i, t -> "${ordinal(i + 1)} — ${t.title}" }.joinToString(". ") + ". Скажите номер.")
+        handler.postDelayed({ if (pendingTaskDone != null) { pendingTaskDone = null; Logger.log("SEC", "Выбор задачи истёк") } }, 20000)
+    }
+
     fun startQuery() {
         querying = true
         aiListening = true
@@ -1021,7 +1157,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             post {
                 aiThinking = false
                 speak(text)
-                VoiceAccessibilityService.instance?.showStatusHold(text, 10, 25000)
+                VoiceAccessibilityService.instance?.showStatusHold(formatForScreen(text), 22, 25000)
                 restartListening(); resetIdle()
             }
         }.start()
@@ -1038,7 +1174,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             post {
                 aiThinking = false
                 speak(ans)
-                VoiceAccessibilityService.instance?.showStatusHold(ans, 8, 20000)
+                VoiceAccessibilityService.instance?.showStatusHold("🧠 " + formatForScreen(ans), 22, 20000)
                 restartListening(); resetIdle()
             }
         }.start()
@@ -1062,6 +1198,24 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             }
             lastResultText = text
             lastResultAt = nowMs
+        }
+
+        // ГЛУБОКИЙ СОН: игнорируем ВСЁ, кроме точной фразы пробуждения (2–3 слова, точное совпадение).
+        if (deepSleep) {
+            if (text.trim() == deepSleepPhrase) {
+                deepSleep = false
+                state = State.AWAKE
+                if (paused) setPaused(false)
+                resetIdle()
+                refreshNotification()
+                VoiceAccessibilityService.instance?.releaseStatusHold()
+                VoiceAccessibilityService.instance?.showStatus(stateText())
+                speak("С возвращением. Я снова слушаю.")
+                Logger.log("REC", "Выход из глубокого сна по фразе: '$text'")
+            } else {
+                Logger.log("REC", "Глубокий сон: игнор '$text'")
+            }
+            return
         }
 
         // Во время озвучки: реагируем ТОЛЬКО на прерывание «Иван + хватит/стоп».
@@ -1327,6 +1481,31 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 else -> { return }   // ждём «да»/«нет»
             }
         }
+        // Ожидание выбора задачи для завершения (по номеру)
+        pendingTaskDone?.let { list ->
+            when {
+                text.contains("отмена") || text.contains("нет") || text.contains("стоп") -> {
+                    pendingTaskDone = null
+                    VoiceAccessibilityService.instance?.releaseStatusHold()
+                    speak("Отменено"); VoiceAccessibilityService.instance?.showStatus("Отменено")
+                    return
+                }
+                else -> {
+                    val idx = choiceIndex(text)
+                    if (idx in 1..list.size) {
+                        val t = list[idx - 1]; pendingTaskDone = null
+                        VoiceAccessibilityService.instance?.releaseStatusHold()
+                        val m = Secretary.mem(this)
+                        m.completeTask(t.id); m.log("Задача выполнена: ${t.title}")
+                        ReminderScheduler.cancelReminder(this, t.id.hashCode())
+                        Logger.log("SEC", "Задача закрыта: ${t.title}")
+                        speak("Закрыл: ${t.title}")
+                        VoiceAccessibilityService.instance?.showStatus("✅ ${t.title}")
+                    } else Logger.log("SEC", "Выбор задачи не распознан: '$text'")
+                    return
+                }
+            }
+        }
         // Ожидание выбора контакта из нескольких совпадений
         pendingContactChoice?.let { list ->
             when {
@@ -1370,15 +1549,28 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 else -> { pendingGestureCalib = false }  // иначе сбрасываем и обрабатываем как обычную команду
             }
         }
+        // Глубокий сон по голосу: «глубокий сон» / «крепкий сон»
+        if (text.contains("глубокий сон") || text.contains("крепкий сон")) {
+            enterDeepSleep(); return
+        }
         // Секретарь: планирование/брифинг/задачи — РАНЬШЕ погоды/календаря («запланируй» содержит «план»)
         run {
             val planTriggers = listOf("запланируй", "запланировать", "назначь", "назначить",
                 "добавь встречу", "добавь событие", "поставь встречу", "запиши план", "планирую", "напомни", "напомнить")
             val taskTriggers = listOf("мои задачи", "список задач", "какие задачи", "что в задачах", "задачи на сегодня")
             val briefTriggers = listOf("брифинг", "сводка", "сводку", "план на день", "доброе утро", "что на сегодня")
+            val doneTriggers = listOf("заверши задачу", "закрой задачу", "закрыть задачу", "задача выполнена",
+                "задачу выполнил", "выполнено", "задача готова", "отметь задачу")
+            val clearTriggers = listOf("очисти задачи", "очисти выполненные", "удали выполненные", "очисти список задач")
             when {
                 planTriggers.any { text.contains(it) } -> { startPlanQuery(); return }
                 briefTriggers.any { text.contains(it) } -> { speakBriefing(); return }
+                clearTriggers.any { text.contains(it) } -> {
+                    val n = Secretary.mem(this).clearDone()
+                    speak(if (n > 0) "Удалил $n выполненных задач" else "Выполненных задач нет")
+                    return
+                }
+                doneTriggers.any { text.contains(it) } -> { startTaskComplete(); return }
                 taskTriggers.any { text.contains(it) } || text.trim() == "задачи" -> { speakTasks(); return }
                 else -> {}
             }
@@ -1461,9 +1653,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                     startAiQuery(false); return
                 }
                 askTriggers.any { text.contains(it) } -> {
-                    val rest = afterAny(text, askTriggers)
-                    if (rest.isNotBlank()) handleAi(true, rest) else startAiQuery(true)
-                    return
+                    // Слова, сказанные в ОДНОЙ фразе после триггера, распознаются маленькой
+                    // командной грамматикой (получается мусор). Поэтому всегда — чистый захват.
+                    startAiQuery(true); return
                 }
                 else -> {}
             }

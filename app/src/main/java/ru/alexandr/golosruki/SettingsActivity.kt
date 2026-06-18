@@ -95,6 +95,8 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var startLeft: EditText
     private lateinit var startRight: EditText
     private lateinit var longPressField: EditText
+    private lateinit var deepSleepCheck: android.widget.Switch
+    private lateinit var deepPhrase: EditText
     private fun labeledNum(box: LinearLayout, label: String, value: Int): EditText {
         box.addView(UiKit.body(this, label))
         val f = field(InputType.TYPE_CLASS_NUMBER).also { it.setText(value.toString()) }
@@ -133,9 +135,12 @@ class SettingsActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val col = UiKit.column(this)
-        col.addView(UiKit.title(this, "Настройки"))
-        col.addView(UiKit.subtitle(this, "Подстройте приложение под человека. После сохранения голосовое управление перезапустится."))
+        fun pg(): LinearLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val p = UiKit.dp(this@SettingsActivity, 16)
+            setPadding(p, UiKit.dp(this@SettingsActivity, 6), p, UiKit.dp(this@SettingsActivity, 24))
+        }
+        val pageVoice = pg(); val pageComm = pg(); val pageSec = pg(); val pageAi = pg(); val pageMore = pg()
 
         val a = UiKit.card(this)
         a.addView(UiKit.sectionHeader(this, "Активация"))
@@ -190,7 +195,22 @@ class SettingsActivity : ComponentActivity() {
         }
         a.addView(noiseCheck)
         a.addView(UiKit.hint(this, "🔇 Включает аппаратное подавление шума и эха микрофона. ПО УМОЛЧАНИЮ ВЫКЛ — включайте, только если в шумной обстановке/при эхе команды распознаются хуже. Если станет хуже — выключите. Поддержка и качество зависят от модели телефона."))
-        col.addView(a)
+        pageVoice.addView(a)
+
+        // Глубокий сон
+        val ds = UiKit.card(this)
+        ds.addView(UiKit.sectionHeader(this, "🌙 Глубокий сон"))
+        ds.addView(UiKit.body(this, "Режим, в котором Иван не реагирует НИ НА ЧТО, кроме одной точной фразы пробуждения. Удобно, когда телефон рядом с разговором/телевизором и обычное слово активации мешает."))
+        deepSleepCheck = UiKit.switchView(this).apply {
+            text = "Разрешить глубокий сон"; textSize = 15f
+            isChecked = SettingsStore.getDeepSleepEnabled(this@SettingsActivity)
+        }
+        ds.addView(deepSleepCheck)
+        ds.addView(UiKit.body(this, "Фраза пробуждения (2–3 слова, точное совпадение). Берите редкое сочетание, которое не прозвучит случайно:"))
+        deepPhrase = field(InputType.TYPE_CLASS_TEXT).also { it.setText(SettingsStore.getDeepSleepPhrase(this)) }
+        ds.addView(deepPhrase)
+        ds.addView(UiKit.hint(this, "Войти: скажите «глубокий сон», кнопкой «🌙 Глубокий сон» на главном экране или в шторке уведомления. Выйти — ТОЛЬКО точной фразой целиком. Слова фразы автоматически добавляются в распознавание после сохранения."))
+        pageVoice.addView(ds)
 
         // Калибровка свайпов
         val cal = UiKit.card(this)
@@ -218,7 +238,7 @@ class SettingsActivity : ComponentActivity() {
         cal.addView(UiKit.body(this, "Длительность долгого нажатия (мс), 500–3000:"))
         longPressField = field(InputType.TYPE_CLASS_NUMBER).also { it.setText(SettingsStore.getLongPressMs(this).toString()) }
         cal.addView(longPressField)
-        col.addView(cal)
+        pageVoice.addView(cal)
 
         val s = UiKit.card(this)
         s.addView(UiKit.sectionHeader(this, "SOS"))
@@ -237,7 +257,7 @@ class SettingsActivity : ComponentActivity() {
         s.addView(UiKit.body(this, "Код-подтверждение. Если задан — SOS только по «сос + код», напр. «сос 911». ЛУЧШЕ ЧИСЛО (911, 123) — распознаётся точнее редкого слова. Пусто — без защиты:"))
         sosPin = field(InputType.TYPE_CLASS_TEXT).also { it.setText(SettingsStore.getSosPin(this)) }
         s.addView(sosPin)
-        col.addView(s)
+        pageComm.addView(s)
 
         val c = UiKit.card(this)
         c.addView(UiKit.sectionHeader(this, "Быстрые контакты"))
@@ -251,7 +271,7 @@ class SettingsActivity : ComponentActivity() {
             if (i < saved.size) saved[i].second else ""
         )
         c.addView(UiKit.button(this, "➕ Добавить контакт") { addContactRow("", "") })
-        col.addView(c)
+        pageComm.addView(c)
 
         // Кастомные команды запуска приложений
         val oc = UiKit.card(this)
@@ -271,7 +291,7 @@ class SettingsActivity : ComponentActivity() {
             if (i < savedOpen.size) savedOpen[i].second else ""
         )
         oc.addView(UiKit.button(this, "➕ Добавить команду") { addOpenRow("", "") })
-        col.addView(oc)
+        pageMore.addView(oc)
 
         // Кастомные жесты
         val gc = UiKit.card(this)
@@ -280,7 +300,7 @@ class SettingsActivity : ComponentActivity() {
         gc.addView(UiKit.button(this, "✍️ Открыть кастомные жесты") {
             startActivity(android.content.Intent(this, CustomGesturesActivity::class.java))
         })
-        col.addView(gc)
+        pageMore.addView(gc)
 
         // Уведомления
         val nc = UiKit.card(this)
@@ -294,7 +314,7 @@ class SettingsActivity : ComponentActivity() {
             isChecked = SettingsStore.getAnnounceNotifs(this@SettingsActivity)
             setOnCheckedChangeListener { _, v -> SettingsStore.setAnnounceNotifs(this@SettingsActivity, v) }
         })
-        col.addView(nc)
+        pageComm.addView(nc)
 
         // Календарь
         val cc = UiKit.card(this)
@@ -306,7 +326,7 @@ class SettingsActivity : ComponentActivity() {
                     this, arrayOf(android.Manifest.permission.READ_CALENDAR), 7011)
             }
         })
-        col.addView(cc)
+        pageSec.addView(cc)
 
         // Контакты телефона
         val ctc = UiKit.card(this)
@@ -327,7 +347,7 @@ class SettingsActivity : ComponentActivity() {
                 if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
             }
         })
-        col.addView(ctc)
+        pageComm.addView(ctc)
 
         // Секретарь
         val sec = UiKit.card(this)
@@ -345,7 +365,38 @@ class SettingsActivity : ComponentActivity() {
             }
         })
         sec.addView(UiKit.body(this, "Память хранится локально (JSON). Экспорт — для будущего переноса на Джарвис-сервер."))
-        col.addView(sec)
+
+        sec.addView(UiKit.sectionHeader(this, "Напоминания и брифинг"))
+        sec.addView(UiKit.body(this, "Иван озвучивает напоминания о задачах (в дополнение к календарю) и может каждое утро зачитывать сводку дня."))
+        val briefSwitch = UiKit.switchView(this).apply {
+            text = "Утренний брифинг голосом"
+            isChecked = SettingsStore.getBriefingEnabled(this@SettingsActivity)
+        }
+        sec.addView(briefSwitch)
+        val briefTime = EditText(this).apply {
+            hint = "09:00"
+            setText("%02d:%02d".format(SettingsStore.getBriefingHour(this@SettingsActivity), SettingsStore.getBriefingMin(this@SettingsActivity)))
+        }
+        sec.addView(UiKit.body(this, "Время брифинга (ЧЧ:ММ):")); sec.addView(briefTime)
+        sec.addView(UiKit.button(this, "Сохранить брифинг") {
+            val parts = briefTime.text.toString().trim().split(":")
+            val h = parts.getOrNull(0)?.toIntOrNull()?.coerceIn(0, 23) ?: 9
+            val m = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 59) ?: 0
+            SettingsStore.setBriefingHour(this, h); SettingsStore.setBriefingMin(this, m)
+            SettingsStore.setBriefingEnabled(this, briefSwitch.isChecked)
+            ReminderScheduler.rearmBriefing(this)
+            android.widget.Toast.makeText(this, if (briefSwitch.isChecked) "Брифинг в %02d:%02d".format(h, m) else "Брифинг выключен", android.widget.Toast.LENGTH_SHORT).show()
+        })
+        sec.addView(UiKit.button(this, "🔔 Тест напоминания (15 сек)") {
+            ReminderScheduler.scheduleReminder(this, 999999, System.currentTimeMillis() + 15000, "Тест напоминания от Ивана")
+            android.widget.Toast.makeText(this, "Иван напомнит через 15 секунд", android.widget.Toast.LENGTH_SHORT).show()
+        })
+        sec.addView(UiKit.button(this, "🗣 Озвучить брифинг сейчас") {
+            val i = Intent(this, VoiceRecognitionService::class.java).setAction(ReminderScheduler.ACTION_BRIEFING)
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+            android.widget.Toast.makeText(this, "Брифинг — через пару секунд", android.widget.Toast.LENGTH_SHORT).show()
+        })
+        pageSec.addView(sec)
 
         // --- Клавиатура ГолосРуки (IME) ---
         val kbc = UiKit.card(this)
@@ -359,7 +410,7 @@ class SettingsActivity : ComponentActivity() {
         kbc.addView(UiKit.button(this, "⚙️ Открыть мастер настройки") {
             startActivity(android.content.Intent(this, SetupActivity::class.java))
         })
-        col.addView(kbc)
+        pageAi.addView(kbc)
 
         // --- ИИ-помощник (преднастройка) ---
         val aiP = AiProfile.load(this)
@@ -420,7 +471,7 @@ class SettingsActivity : ComponentActivity() {
                 .onFailure { aiModelStatus.text = "Не удалось открыть выбор файла." }
         })
         ai.addView(UiKit.hint(this, "В менеджере моделей: список от лёгкой (Gemma 1B, для теста) к мощной (Gemma 4B, рекомендуется), скачивание по токену HuggingFace прямо в приложении. 1B слаба в математике — для нормального качества берите 4B."))
-        col.addView(ai)
+        pageAi.addView(ai)
 
         // --- Голос озвучки ---
         val vc = UiKit.card(this)
@@ -448,7 +499,7 @@ class SettingsActivity : ComponentActivity() {
             runCatching { startActivity(Intent("com.android.settings.TTS_SETTINGS").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                 .onFailure { Toast.makeText(this, "Откройте: Настройки → Спец.возможности → Синтез речи", Toast.LENGTH_LONG).show() }
         })
-        col.addView(vc)
+        pageVoice.addView(vc)
         initVoices()
 
         val bc = UiKit.card(this)
@@ -467,11 +518,44 @@ class SettingsActivity : ComponentActivity() {
             }
             runCatching { startActivityForResult(i, REQ_IMPORT) }
         })
-        col.addView(bc)
+        pageMore.addView(bc)
 
-        col.addView(UiKit.button(this, "💾 Сохранить и перезапустить", R.drawable.btn_amber) { save() })
+        // --- Сборка вкладок ---
+        val pages = listOf(pageVoice, pageComm, pageSec, pageAi, pageMore)
+        val scrolls = pages.map { ScrollView(this).apply { addView(it); isVerticalScrollBarEnabled = false } }
+        val content = android.widget.FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
+        scrolls.forEachIndexed { i, sv -> sv.visibility = if (i == 0) android.view.View.VISIBLE else android.view.View.GONE; content.addView(sv) }
 
-        setContentView(ScrollView(this).apply { addView(col) })
+        val header = UiKit.title(this, "Настройки").apply {
+            val p = UiKit.dp(this@SettingsActivity, 18)
+            setPadding(p, UiKit.dp(this@SettingsActivity, 22), p, UiKit.dp(this@SettingsActivity, 6))
+        }
+        val tabNames = listOf("Голос", "Связь", "Дела", "ИИ", "Ещё")
+        fun setTab(i: Int) {
+            scrolls.forEachIndexed { j, sv -> sv.visibility = if (i == j) android.view.View.VISIBLE else android.view.View.GONE }
+            header.text = "Настройки · ${tabNames[i]}"
+        }
+        val nav = UiKit.navBar(this, listOf(
+            "🎙" to "Голос", "📞" to "Связь", "🗂" to "Дела", "🤖" to "ИИ", "⚙️" to "Ещё"
+        ), 0) { setTab(it) }
+
+        val saveBtn = UiKit.button(this, "💾 Сохранить и перезапустить", R.drawable.btn_amber) { save() }.apply {
+            (layoutParams as LinearLayout.LayoutParams).apply {
+                val m = UiKit.dp(this@SettingsActivity, 14); leftMargin = m; rightMargin = m; topMargin = UiKit.dp(this@SettingsActivity, 6)
+            }
+        }
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundResource(R.drawable.screen_bg)
+            addView(header)
+            addView(content)
+            addView(saveBtn)
+            addView(nav)
+        }
+        setContentView(root)
         refreshModelStatus()
     }
 
@@ -598,6 +682,8 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setConfirmCalls(this, confirmCheck.isChecked)
         SettingsStore.setBtMic(this, btMicCheck.isChecked)
         SettingsStore.setNoiseSuppress(this, noiseCheck.isChecked)
+        SettingsStore.setDeepSleepEnabled(this, deepSleepCheck.isChecked)
+        SettingsStore.setDeepSleepPhrase(this, deepPhrase.text.toString().lowercase().trim().ifBlank { "иван полный подъём" })
         SettingsStore.setAutoIme(this, autoImeCheck.isChecked)
         AiProfile.save(this, AiProfile.Profile(
             enabled = aiEnableCheck.isChecked,

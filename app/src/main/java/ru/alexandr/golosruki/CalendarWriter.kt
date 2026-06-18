@@ -15,6 +15,16 @@ object CalendarWriter {
         ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.WRITE_CALENDAR) ==
             PackageManager.PERMISSION_GRANTED
 
+    /** Полночь UTC той же календарной даты (для корректных событий «на весь день»). */
+    private fun midnightUtc(localMillis: Long): Long {
+        val local = java.util.Calendar.getInstance().apply { timeInMillis = localMillis }
+        val utc = java.util.Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+            clear()
+            set(local.get(java.util.Calendar.YEAR), local.get(java.util.Calendar.MONTH), local.get(java.util.Calendar.DAY_OF_MONTH), 0, 0, 0)
+        }
+        return utc.timeInMillis
+    }
+
     /** ID основного (или первого видимого) календаря. */
     private fun primaryCalendarId(ctx: Context): Long? {
         val proj = arrayOf(
@@ -55,12 +65,14 @@ object CalendarWriter {
         val calId = primaryCalendarId(ctx)
         if (calId == null) { Logger.log("SEC", "Нет доступного календаря для записи"); return false }
         val tz = TimeZone.getDefault().id
-        val end = if (allDay) start + 24L * 60 * 60 * 1000 else start + durationMin.coerceAtLeast(15) * 60_000L
+        // Для события «на весь день» DTSTART должен быть полночью в UTC, иначе оно «уезжает» на соседний день.
+        val dtStart = if (allDay) midnightUtc(start) else start
+        val end = if (allDay) dtStart + 24L * 60 * 60 * 1000 else dtStart + durationMin.coerceAtLeast(15) * 60_000L
         val values = ContentValues().apply {
             put(CalendarContract.Events.CALENDAR_ID, calId)
             put(CalendarContract.Events.TITLE, title)
             if (description.isNotBlank()) put(CalendarContract.Events.DESCRIPTION, description)
-            put(CalendarContract.Events.DTSTART, start)
+            put(CalendarContract.Events.DTSTART, dtStart)
             put(CalendarContract.Events.DTEND, end)
             put(CalendarContract.Events.EVENT_TIMEZONE, if (allDay) "UTC" else tz)
             if (allDay) put(CalendarContract.Events.ALL_DAY, 1)

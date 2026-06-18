@@ -190,6 +190,7 @@ object UiKit {
     fun card(ctx: Context): LinearLayout = LinearLayout(ctx).apply {
         orientation = LinearLayout.VERTICAL
         setBackgroundResource(R.drawable.card_bg)
+        elevation = dp(ctx, 7).toFloat()   // мягкая тень → ощущение «стекла» над фоном
         val p = dp(ctx, 18)
         setPadding(p, p, p, p)
         val lp = LinearLayout.LayoutParams(
@@ -197,5 +198,55 @@ object UiKit {
         )
         lp.topMargin = dp(ctx, 12)
         layoutParams = lp
+    }
+
+    /** Стеклянная (полупрозрачная) кнопка для второстепенных действий. */
+    fun glassButton(ctx: Context, text: String, onClick: () -> Unit): Button =
+        Button(ctx).apply {
+            this.text = text
+            setTextColor(Color.parseColor("#0E7C7B"))
+            textSize = 16f; isAllCaps = false
+            setTypeface(fontSemi(ctx))
+            setBackgroundResource(R.drawable.btn_glass)
+            elevation = dp(ctx, 3).toFloat()
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ); lp.topMargin = dp(ctx, 10); layoutParams = lp
+            val ph = dp(ctx, 15); setPadding(ph, ph, ph, ph)
+            setOnClickListener { onClick() }
+        }
+
+    /** Нижний навбар-вкладки (значок + подпись), с подсветкой активной вкладки. */
+    fun navBar(ctx: Context, items: List<Pair<String, String>>, initial: Int, onSelect: (Int) -> Unit): LinearLayout {
+        val cells = ArrayList<LinearLayout>()
+        fun select(idx: Int) {
+            cells.forEachIndexed { i, cell ->
+                cell.setBackgroundResource(if (i == idx) R.drawable.nav_pill else 0)
+                (cell.getChildAt(1) as TextView).setTextColor(Color.parseColor(if (i == idx) "#0E7C7B" else "#5A6370"))
+            }
+        }
+        val bar = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundResource(R.drawable.nav_bg)
+            elevation = dp(ctx, 14).toFloat()
+            val p = dp(ctx, 6); setPadding(p, dp(ctx, 8), p, dp(ctx, 10))
+        }
+        items.forEachIndexed { i, (icon, label) ->
+            val cell = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; isClickable = true
+                val pv = dp(ctx, 7); setPadding(dp(ctx, 2), pv, dp(ctx, 2), pv)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    .apply { val m = dp(ctx, 3); marginStart = m; marginEnd = m }
+                addView(TextView(ctx).apply { text = icon; textSize = 19f; gravity = Gravity.CENTER })
+                addView(TextView(ctx).apply {
+                    text = label; textSize = 11f; setTypeface(fontSemi(ctx)); gravity = Gravity.CENTER
+                    setPadding(0, dp(ctx, 2), 0, 0)
+                })
+                setOnClickListener { select(i); onSelect(i) }
+            }
+            cells.add(cell); bar.addView(cell)
+        }
+        select(initial)
+        return bar
     }
 }

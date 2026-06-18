@@ -209,6 +209,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var aiDialog = false // идёт режим диалога с ИИ (до «хватит»)
     @Volatile private var lastAiQuestion = "" // последний вопрос к ИИ (для «подробнее»)
     @Volatile private var answerHeld = false  // на экране ответ ИИ/брифинг/задачи — держим до конца озвучки + дочитывания
+    @Volatile private var answerStartedAt = 0L // когда начался показ ответа (для выбора: после короткого — в команды, после долгого — в сон)
     @Volatile private var aiAsk = true     // true — вопрос, false — сформулировать текст
     @Volatile private var aiThinking = false  // идёт генерация ответа (модель «думает»)
     @Volatile private var planning = false    // свободный захват — это план для секретаря (не вопрос)
@@ -283,14 +284,23 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         answerHeld = false
         if (!hasPendingHold()) {
             VoiceAccessibilityService.instance?.releaseStatusHold()
-            VoiceAccessibilityService.instance?.showStatus(stateText())
-            if (state == State.ASLEEP) VoiceAccessibilityService.instance?.keepScreenOn(false)
+            val engagedMs = System.currentTimeMillis() - answerStartedAt
+            if (engagedMs < idleMs) {
+                // Короткий ответ (уложился в окно простоя) — возвращаем обычный командный режим (бодрствование).
+                state = State.AWAKE
+                VoiceAccessibilityService.instance?.showStatus(stateText())
+                resetIdle()
+            } else {
+                // Длинный ответ — управление возвращаем в сон (ждём «Иван»). «Подробнее» — фразой «<слово> подробнее».
+                goToSleep()
+            }
         }
     }
 
     /** Удерживать ответ на экране на время озвучки + дочитывания (длиннее текст — дольше). */
     private fun holdAnswer(text: String) {
         answerHeld = true
+        answerStartedAt = System.currentTimeMillis()
         handler.removeCallbacks(clearAnswerHold)
         handler.postDelayed(clearAnswerHold, (text.length * 70L + 5000L).coerceIn(8000L, 90000L))
     }
@@ -887,6 +897,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 val voice = AiProfile.load(this).voiceAnswers
                 // Ответ держим на экране до конца озвучки + время на дочитывание (не подменяется «сном»).
                 answerHeld = true
+                answerStartedAt = System.currentTimeMillis()
                 handler.removeCallbacks(clearAnswerHold)
                 VoiceAccessibilityService.instance?.showStatusHold("🧠 " + formatForScreen(answer), 26, 0L)
                 val continueDialog = aiDialog && ask

@@ -568,9 +568,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         t = t.replace(Regex("__(.+?)__"), "$1. ")
         t = t.replace(Regex("\\[(.+?)\\]\\(.+?\\)"), "$1")           // [текст](ссылка) → текст
         t = t.replace(Regex("[*_`#>]"), "")
-        // Нумерованные пункты ПРОИЗНОСИМ (в тексте могут быть ссылки на пункты): «1. …» → «Пункт 1: …».
+        // Нумерованные пункты ПРОИЗНОСИМ, но только если это реально пункт в НАЧАЛЕ строки («1. …» → «Пункт 1: …»).
+        // Числа внутри предложения («стоит 34 рубля», «в 2026») НЕ трогаем, чтобы не читать их как «пункт».
         t = t.replace(Regex("(?m)^\\s*(\\d{1,2})[.)]\\s+"), "Пункт $1: ")
-        t = t.replace(Regex("(?<=\\S)\\s+(\\d{1,2})[.)]\\s+"), ". Пункт $1: ")
         // маркеры списка → короткая пауза
         t = t.replace(Regex("(?m)^\\s*[-–—•·]\\s+"), "")
         t = t.replace(Regex("(?<=\\S)\\s+[-–—•·]\\s+"), ", ")
@@ -611,7 +611,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         afterSpeak = action
         isSpeaking = true
         handler.removeCallbacks(resumeAfterSpeak)   // НЕ возобновлять Vosk автоматически — действие решит само
-        runCatching { tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki_then") }
+        runCatching { tts?.speak(cleanForSpeech(text), android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki_then") }
         // страховка, если onDone не придёт
         handler.postDelayed({ val cb = afterSpeak; if (cb != null) { afterSpeak = null; isSpeaking = false; cb() } }, 1800L + text.length * 90L)
     }
@@ -906,7 +906,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                     val toSpeak = if (composedOk) "Сгенерировал текст" else answer
                     // озвучить и ТОЛЬКО после речи — дать дочитать, затем продолжить
                     speakThen(toSpeak) {
-                        if (continueDialog) handler.postDelayed({ answerHeld = false; startAiQuery(true) }, 2500L)
+                        if (continueDialog) { answerHeld = false; startAiQuery(true) }   // сразу слушаем следующую реплику
                         else { handler.postDelayed(clearAnswerHold, 5000L); restartListening(); resetIdle() }
                     }
                 } else {
@@ -991,7 +991,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             VoiceAccessibilityService.instance?.keepScreenOn(false)
         }
         refreshNotification()
-        Logger.log("REC", "Жест: микрофон уведён в сон")
+        Logger.log("REC", "Микрофон уведён в сон")
     }
 
     /** Войти в глубокий сон (если разрешён). Выход — только точной фразой пробуждения. */

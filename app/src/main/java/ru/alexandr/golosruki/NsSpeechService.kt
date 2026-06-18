@@ -34,6 +34,12 @@ class NsSpeechService(
     @Volatile private var paused = false
     private val main = Handler(Looper.getMainLooper())
 
+    // Программный фронт-энд (до Vosk): high-pass от гула + AGC, если аппаратного AGC нет.
+    private var swAgc = false
+    private var agcGain = 1.0f
+    private var hpPrevIn = 0
+    private var hpPrevOut = 0f
+
     /** true — запуск удался; false — нужно откатиться на штатный SpeechService. */
     fun start(): Boolean {
         val minBuf = AudioRecord.getMinBufferSize(
@@ -56,7 +62,11 @@ class NsSpeechService(
         if (AcousticEchoCanceler.isAvailable()) { aec = runCatching { AcousticEchoCanceler.create(sid)?.apply { enabled = true } }.getOrNull(); if (aec != null) fx += "AEC " }
         if (NoiseSuppressor.isAvailable()) { ns = runCatching { NoiseSuppressor.create(sid)?.apply { enabled = true } }.getOrNull(); if (ns != null) fx += "NS " }
         if (AutomaticGainControl.isAvailable()) { agc = runCatching { AutomaticGainControl.create(sid)?.apply { enabled = true } }.getOrNull(); if (agc != null) fx += "AGC " }
-        Logger.log("NS", "Шумоподавление включено. Эффекты: ${if (fx.isBlank()) "нет (источник VOICE_COMMUNICATION)" else fx}")
+        // Если аппаратного AGC нет — включаем программный (важно для тихой/дальней речи).
+        swAgc = (agc == null)
+        if (swAgc) fx += "AGC(прогр.) "
+        fx += "HPF "   // программный high-pass от низкочастотного гула — всегда
+        Logger.log("NS", "Звуковой фронт-энд: ${if (fx.isBlank()) "нет (источник VOICE_COMMUNICATION)" else fx.trim()}")
 
         running = true
         runCatching { rec.startRecording() }
@@ -65,6 +75,7 @@ class NsSpeechService(
             while (running) {
                 val n = rec.read(buffer, 0, buffer.size)
                 if (n > 0 && !paused) {
+                    enhance(buffer, n)   // фронт-энд: high-pass + (при необходимости) программный AGC
                     val end = recognizer.acceptWaveForm(buffer, n)
                     if (end) {
                         val r = recognizer.result
@@ -81,6 +92,31 @@ class NsSpeechService(
 
     /** Пауза распознавания (анти-петля во время TTS): читаем, но не подаём в распознаватель. */
     fun setPause(p: Boolean) { paused = p }
+
+    /** Звуковой фронт-энд перед Vosk: high-pass от гула + мягкий AGC (если нет аппаратного). */
+    private fun enhance(buf: ShortArray, n: Int) {
+        // 1) One-pole high-pass (DC-blocker, ~срез ниже ~60 Гц) — убирает низкочастотный гул/рокот.
+        val a = 0.97f
+        for (i in 0 until n) {
+            val x = buf[i].toInt()
+            val y = a * (hpPrevOut + x - hpPrevIn)
+            hpPrevIn = x
+            hpPrevOut = y
+            buf[i] = y.toInt().coerceIn(-32768, 32767).toShort()
+        }
+        // 2) Программный AGC по пику — только если нет аппаратного.
+        if (!swAgc) return
+        var peak = 1
+        for (i in 0 until n) { val v = kotlin.math.abs(buf[i].toInt()); if (v > peak) peak = v }
+        if (peak < 250) return            // тишина/шумовой пол — не усиливаем (иначе раздуем шум)
+        val target = 9000                 // целевой пик из 32767 (комфортный уровень для ASR)
+        val desired = (target.toFloat() / peak).coerceIn(0.5f, 6.0f)
+        agcGain += (desired - agcGain) * 0.25f   // плавная атака, без «дёрганья»
+        if (kotlin.math.abs(agcGain - 1.0f) < 0.05f) return
+        for (i in 0 until n) {
+            buf[i] = (buf[i] * agcGain).toInt().coerceIn(-32768, 32767).toShort()
+        }
+    }
 
     fun stop() {
         running = false

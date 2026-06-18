@@ -19,8 +19,13 @@ object LocalFacts {
     fun answer(ctx: Context, raw: String): String? {
         val t = raw.lowercase()
 
-        // Заряд батареи
-        if (t.contains("батаре") || t.contains("заряд") || t.contains("аккумулятор")) {
+        // Заряд батареи. ВАЖНО: «зарядка/разминка/упражнения» — это НЕ про батарею (была ложная сработка
+        // на «придумай план для зарядки»). Требуем явный батарейный контекст и исключаем «зарядк/разрядк».
+        val exerciseCtx = t.contains("зарядк") || t.contains("разминк") || t.contains("упражнен") ||
+            t.contains("тренировк") || t.contains("разрядк")
+        val batteryCtx = t.contains("батаре") || t.contains("аккумулятор") ||
+            (t.contains("заряд") && !exerciseCtx)
+        if (batteryCtx && !exerciseCtx) {
             val (level, charging) = battery(ctx)
             if (level < 0) return "Не могу определить уровень заряда."
             val chg = if (charging) " Телефон заряжается." else ""

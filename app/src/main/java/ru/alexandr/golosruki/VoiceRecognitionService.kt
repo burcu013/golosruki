@@ -50,6 +50,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var btReceiver: android.content.BroadcastReceiver? = null
     private fun enableBtMic() {
         btMicWanted = true
+        Logger.log("MIC", "Включаю BT-микрофон (Android API ${Build.VERSION.SDK_INT})")
         if (Build.VERSION.SDK_INT >= 31 && enableBtMicModern()) return
         enableBtMicLegacy()
     }
@@ -57,26 +58,41 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     /** Новый API (Android 12+): маршрутизация захвата звука на BT-устройство связи. */
     private fun enableBtMicModern(): Boolean {
         return try {
-            val bt = audioManager.availableCommunicationDevices.firstOrNull {
-                it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-            }
+            val devs = audioManager.availableCommunicationDevices
+            Logger.log("MIC", "Устройства связи: " + (devs.joinToString { "${audioDevTypeName(it.type)}:${it.productName}" }.ifBlank { "нет" }))
+            val bt = devs.firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
             if (bt == null) {
-                Logger.log("MIC", "BT-устройство связи не найдено (новый API) — пробую старый способ")
+                Logger.log("MIC", "BT-устройство связи (SCO) не найдено — пробую старый способ")
                 return false
             }
+            // Режим связи помогает маршрутизации захвата на гарнитуру.
+            runCatching { audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION }
             val ok = audioManager.setCommunicationDevice(bt)
             if (ok) {
                 btScoOn = true
                 Logger.log("MIC", "Bluetooth-микрофон активен (новый API): ${bt.productName}")
                 VoiceAccessibilityService.instance?.showStatus("🎧 Bluetooth-микрофон активен")
-                if (model != null) restartListening()
+                // даём маршрутизации устояться, затем пересоздаём распознаватель на гарнитуре
+                if (model != null) handler.postDelayed({ if (btMicWanted) restartListening() }, 400)
             } else {
                 Logger.log("MIC", "setCommunicationDevice вернул false — пробую старый способ")
+                runCatching { audioManager.mode = android.media.AudioManager.MODE_NORMAL }
             }
             ok
         } catch (e: Exception) {
             Logger.log("MIC", "Новый BT API не сработал: ${e.message}"); false
         }
+    }
+
+    /** Читабельное имя типа аудиоустройства — для диагностики маршрутизации микрофона. */
+    private fun audioDevTypeName(t: Int): String = when (t) {
+        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "BT_SCO"
+        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "BT_A2DP"
+        android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC -> "ВСТРОЕННЫЙ_МИК"
+        android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET -> "ПРОВОДНАЯ_ГАРН"
+        android.media.AudioDeviceInfo.TYPE_USB_DEVICE -> "USB"
+        android.media.AudioDeviceInfo.TYPE_TELEPHONY -> "ТЕЛЕФОНИЯ"
+        else -> "тип$t"
     }
 
     /** Старый способ (Android < 12 либо если новый API не нашёл устройство): Bluetooth SCO. */
@@ -743,7 +759,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             // Поэтому при включённом BT-микрофоне берём этот движок даже если шумоподавление выключено.
             val useComm = (useNoiseSuppress || btMicWanted) && !callActive
             if (useComm) {
-                val s = NsSpeechService(rec, 16000, this)
+                val s = NsSpeechService(rec, 16000, this, this)
                 if (s.start()) {
                     nsService = s
                 } else {

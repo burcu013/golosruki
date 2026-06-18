@@ -1,11 +1,15 @@
 package ru.alexandr.golosruki
 
+import android.content.Context
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import org.vosk.Recognizer
@@ -23,7 +27,8 @@ import org.vosk.android.RecognitionListener
 class NsSpeechService(
     private val recognizer: Recognizer,
     private val sampleRate: Int,
-    private val listener: RecognitionListener
+    private val listener: RecognitionListener,
+    private val ctx: Context
 ) {
     private var record: AudioRecord? = null
     private var aec: AcousticEchoCanceler? = null
@@ -57,6 +62,21 @@ class NsSpeechService(
         }
         if (rec.state != AudioRecord.STATE_INITIALIZED) { runCatching { rec.release() }; return false }
         record = rec
+
+        // Если есть BT-микрофон (гарнитура/авто) — ПРИНУДИТЕЛЬНО направляем запись на него.
+        // Без этого система часто оставляет встроенный микрофон даже при VOICE_COMMUNICATION.
+        runCatching {
+            val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val btIn = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
+                .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+            if (btIn != null) {
+                val set = rec.setPreferredDevice(btIn)
+                Logger.log("MIC", "Предпочитаю BT-микрофон записи: ${btIn.productName} (set=$set)")
+            } else {
+                Logger.log("MIC", "BT-микрофон записи не найден среди входов — запись со встроенного")
+            }
+        }
+
         val sid = rec.audioSessionId
         var fx = ""
         if (AcousticEchoCanceler.isAvailable()) { aec = runCatching { AcousticEchoCanceler.create(sid)?.apply { enabled = true } }.getOrNull(); if (aec != null) fx += "AEC " }
@@ -70,6 +90,18 @@ class NsSpeechService(
 
         running = true
         runCatching { rec.startRecording() }
+        // Диагностика: с какого микрофона реально идёт запись (BT_SCO или встроенный).
+        if (Build.VERSION.SDK_INT >= 24) runCatching {
+            val rd = rec.routedDevice
+            val name = when (rd?.type) {
+                AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "BT_SCO (гарнитура) ✅"
+                AudioDeviceInfo.TYPE_BUILTIN_MIC -> "ВСТРОЕННЫЙ микрофон"
+                AudioDeviceInfo.TYPE_WIRED_HEADSET -> "проводная гарнитура"
+                null -> "неизвестно"
+                else -> "тип${rd.type}"
+            }
+            Logger.log("MIC", "Запись идёт с: $name")
+        }
         thread = Thread {
             val buffer = ShortArray(3200)  // ~0.2 c
             while (running) {

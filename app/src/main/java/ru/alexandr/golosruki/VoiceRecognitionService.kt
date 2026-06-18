@@ -452,6 +452,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
                 override fun onStart(id: String?) { isSpeaking = true }
                 override fun onDone(id: String?) {
+                    isSpeaking = false   // ВАЖНО: и для speakThen-пути, иначе флаг «говорит синтезатор» застревает и блокирует команды
                     val cb = afterSpeak
                     if (cb != null) { afterSpeak = null; handler.post { cb() } }
                     else { scheduleResume(500); post { if (!hasPendingHold()) VoiceAccessibilityService.instance?.releaseStatusHold() } }
@@ -612,7 +613,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.removeCallbacks(resumeAfterSpeak)   // НЕ возобновлять Vosk автоматически — действие решит само
         runCatching { tts?.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki_then") }
         // страховка, если onDone не придёт
-        handler.postDelayed({ val cb = afterSpeak; if (cb != null) { afterSpeak = null; cb() } }, 1800L + text.length * 90L)
+        handler.postDelayed({ val cb = afterSpeak; if (cb != null) { afterSpeak = null; isSpeaking = false; cb() } }, 1800L + text.length * 90L)
     }
 
     private fun vibrateTick() {

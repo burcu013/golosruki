@@ -111,21 +111,34 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 else
                     registerReceiver(btReceiver, filter)
             }
+            // КЛЮЧЕВОЕ: режим связи — без него многие телефоны не поднимают SCO и микрофон остаётся встроенным.
+            runCatching { audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION }
+            startScoWithRetry(0)
+        }
+    }
+
+    /** Поднять BT SCO с несколькими попытками (некоторые гарнитуры подключаются не с первого раза). */
+    private fun startScoWithRetry(attempt: Int) {
+        if (!btMicWanted || btScoOn) return
+        if (attempt >= 4) {
+            Logger.log("MIC", "BT SCO не поднялся после 4 попыток — встроенный микрофон")
+            VoiceAccessibilityService.instance?.showStatus("Bluetooth-микрофон не подключился — встроенный")
+            runCatching { audioManager.mode = android.media.AudioManager.MODE_NORMAL }
+            return
+        }
+        runCatching { audioManager.stopBluetoothSco() }
+        runCatching {
             audioManager.startBluetoothSco()
             audioManager.isBluetoothScoOn = true
         }
-        // страховка: если за 8 c не подключилось — работаем на встроенном
-        handler.postDelayed({
-            if (btMicWanted && !btScoOn) {
-                Logger.log("MIC", "BT SCO не подключился за 8с — встроенный микрофон")
-                VoiceAccessibilityService.instance?.showStatus("Bluetooth-микрофон не подключился — встроенный")
-            }
-        }, 8000)
+        Logger.log("MIC", "BT SCO попытка ${attempt + 1}…")
+        handler.postDelayed({ if (btMicWanted && !btScoOn) startScoWithRetry(attempt + 1) }, 2500)
     }
     private fun disableBtMic() {
         btMicWanted = false; btScoOn = false
         if (Build.VERSION.SDK_INT >= 31) runCatching { audioManager.clearCommunicationDevice() }
         runCatching { audioManager.isBluetoothScoOn = false; audioManager.stopBluetoothSco() }
+        runCatching { audioManager.mode = android.media.AudioManager.MODE_NORMAL }
         runCatching { btReceiver?.let { unregisterReceiver(it) } }; btReceiver = null
     }
 
@@ -165,7 +178,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         return try {
             val m = audioManager.mode
             m == android.media.AudioManager.MODE_IN_CALL ||
-                (m == android.media.AudioManager.MODE_IN_COMMUNICATION && !btScoOn && nsService == null)
+                (m == android.media.AudioManager.MODE_IN_COMMUNICATION && !btScoOn && !btMicWanted && nsService == null)
         } catch (e: Exception) { false }
     }
     fun wakeWordPublic(): String = wakeWord
@@ -195,6 +208,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile var aiListening = false      // идёт свободный захват вопроса/текста для ИИ
     @Volatile private var aiDialog = false // идёт режим диалога с ИИ (до «хватит»)
     @Volatile private var lastAiQuestion = "" // последний вопрос к ИИ (для «подробнее»)
+    @Volatile private var answerHeld = false  // на экране ответ ИИ/брифинг/задачи — держим до конца озвучки + дочитывания
     @Volatile private var aiAsk = true     // true — вопрос, false — сформулировать текст
     @Volatile private var aiThinking = false  // идёт генерация ответа (модель «думает»)
     @Volatile private var planning = false    // свободный захват — это план для секретаря (не вопрос)
@@ -257,9 +271,35 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private val idleRunnable = Runnable {
         if (aiListening) { aiListening = false; restartListening() }   // заброшенный ИИ-запрос — сброс
         state = State.ASLEEP
-        VoiceAccessibilityService.instance?.showStatus(stateText())
-        VoiceAccessibilityService.instance?.keepScreenOn(false)
+        if (!answerHeld) {   // во время долгого ответа не подменяем текст на «сон»
+            VoiceAccessibilityService.instance?.showStatus(stateText())
+            VoiceAccessibilityService.instance?.keepScreenOn(false)
+        }
         refreshNotification()
+    }
+
+    /** Снять удержание ответа на экране (после озвучки + времени на дочитывание). */
+    private val clearAnswerHold = Runnable {
+        answerHeld = false
+        if (!hasPendingHold()) {
+            VoiceAccessibilityService.instance?.releaseStatusHold()
+            VoiceAccessibilityService.instance?.showStatus(stateText())
+            if (state == State.ASLEEP) VoiceAccessibilityService.instance?.keepScreenOn(false)
+        }
+    }
+
+    /** Удерживать ответ на экране на время озвучки + дочитывания (длиннее текст — дольше). */
+    private fun holdAnswer(text: String) {
+        answerHeld = true
+        handler.removeCallbacks(clearAnswerHold)
+        handler.postDelayed(clearAnswerHold, (text.length * 70L + 5000L).coerceIn(8000L, 90000L))
+    }
+
+    /** Озвучить длинный ответ и держать его текст на экране до конца озвучки + дочитывания. */
+    private fun speakAndHold(spoken: String, icon: String = "🧠") {
+        holdAnswer(spoken)
+        VoiceAccessibilityService.instance?.showStatusHold("$icon " + formatForScreen(spoken), 26, 0L)
+        speak(spoken)
     }
 
     companion object {
@@ -480,13 +520,14 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     /** Активно ли окно, ожидающее выбора/подтверждения голосом (его нельзя гасить по окончании речи). */
     private fun hasPendingHold(): Boolean =
-        pendingContactChoice != null || pendingPlan != null || pendingTaskDone != null
+        pendingContactChoice != null || pendingPlan != null || pendingTaskDone != null || answerHeld
 
     /** Прервать текущую озвучку голосом и вернуться к слушанию. */
     private fun stopSpeaking() {
         runCatching { tts?.stop() }
         handler.removeCallbacks(resumeAfterSpeak)
         isSpeaking = false
+        answerHeld = false; handler.removeCallbacks(clearAnswerHold)   // «стоп/хватит» — убрать и удержание ответа
         post {
             if (!hasPendingHold()) {
                 VoiceAccessibilityService.instance?.releaseStatusHold()
@@ -516,9 +557,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         t = t.replace(Regex("__(.+?)__"), "$1. ")
         t = t.replace(Regex("\\[(.+?)\\]\\(.+?\\)"), "$1")           // [текст](ссылка) → текст
         t = t.replace(Regex("[*_`#>]"), "")
-        // нумерованные пункты: число не читаем, ставим паузу (иначе робот говорит «один… два…»)
-        t = t.replace(Regex("(?m)^\\s*\\d{1,2}[.)]\\s+"), "")        // ведущая нумерация
-        t = t.replace(Regex("(?<=\\S)\\s+\\d{1,2}[.)]\\s+"), ". ")   // нумерация в строке → пауза
+        // Нумерованные пункты ПРОИЗНОСИМ (в тексте могут быть ссылки на пункты): «1. …» → «Пункт 1: …».
+        t = t.replace(Regex("(?m)^\\s*(\\d{1,2})[.)]\\s+"), "Пункт $1: ")
+        t = t.replace(Regex("(?<=\\S)\\s+(\\d{1,2})[.)]\\s+"), ". Пункт $1: ")
         // маркеры списка → короткая пауза
         t = t.replace(Regex("(?m)^\\s*[-–—•·]\\s+"), "")
         t = t.replace(Regex("(?<=\\S)\\s+[-–—•·]\\s+"), ", ")
@@ -687,12 +728,15 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 Recognizer(m, 16000.0f, Vocabulary.buildGrammar(personal, wakeWord, mediaCode))
             }
             recognizer = rec
-            if (useNoiseSuppress && !callActive) {
+            // BT-гарнитура захватывается только источником VOICE_COMMUNICATION (его использует NsSpeechService).
+            // Поэтому при включённом BT-микрофоне берём этот движок даже если шумоподавление выключено.
+            val useComm = (useNoiseSuppress || btMicWanted) && !callActive
+            if (useComm) {
                 val s = NsSpeechService(rec, 16000, this)
                 if (s.start()) {
                     nsService = s
                 } else {
-                    Logger.log("NS", "Шумоподавление не запустилось — откат на штатный движок")
+                    Logger.log("NS", "VOICE_COMMUNICATION-движок не запустился — откат на штатный")
                     speechService = SpeechService(rec, 16000.0f).also { it.startListening(this) }
                 }
             } else {
@@ -841,15 +885,23 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 // «Сформулируй» — вставляем готовый текст в активное поле ввода
                 if (composedOk) insertComposed(answer)
                 val voice = AiProfile.load(this).voiceAnswers
-                // Статус с ответом держим до конца озвучки; без озвучки — по времени чтения.
-                val autoRelease = if (voice) 0L else estimateReadMs(answer)
-                VoiceAccessibilityService.instance?.showStatusHold("🧠 " + formatForScreen(answer), 22, autoRelease)
+                // Ответ держим на экране до конца озвучки + время на дочитывание (не подменяется «сном»).
+                answerHeld = true
+                handler.removeCallbacks(clearAnswerHold)
+                VoiceAccessibilityService.instance?.showStatusHold("🧠 " + formatForScreen(answer), 26, 0L)
+                val continueDialog = aiDialog && ask
                 if (voice) {
-                    // Текст для вставки не зачитываем — он уже в поле; только подтверждаем.
-                    speak(if (composedOk) "Сгенерировал текст" else answer)
+                    val toSpeak = if (composedOk) "Сгенерировал текст" else answer
+                    // озвучить и ТОЛЬКО после речи — дать дочитать, затем продолжить
+                    speakThen(toSpeak) {
+                        if (continueDialog) handler.postDelayed({ answerHeld = false; startAiQuery(true) }, 2500L)
+                        else { handler.postDelayed(clearAnswerHold, 5000L); restartListening(); resetIdle() }
+                    }
+                } else {
+                    val readMs = estimateReadMs(answer)
+                    if (continueDialog) handler.postDelayed({ answerHeld = false; startAiQuery(true) }, readMs)
+                    else { handler.postDelayed(clearAnswerHold, readMs); restartListening(); resetIdle() }
                 }
-                if (aiDialog && ask) startAiQuery(true)   // продолжаем диалог — снова слушаем
-                else { restartListening(); resetIdle() }   // вернуться к командам
             }
         }.start()
     }
@@ -922,8 +974,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.removeCallbacks(idleRunnable)
         if (aiListening) { aiListening = false }
         state = State.ASLEEP
-        VoiceAccessibilityService.instance?.showStatus(stateText())
-        VoiceAccessibilityService.instance?.keepScreenOn(false)
+        if (!answerHeld) {   // не подменять текст ответа на «сон», пока идёт озвучка/чтение
+            VoiceAccessibilityService.instance?.showStatus(stateText())
+            VoiceAccessibilityService.instance?.keepScreenOn(false)
+        }
         refreshNotification()
         Logger.log("REC", "Жест: микрофон уведён в сон")
     }
@@ -1120,7 +1174,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         val lines = t.take(8).joinToString("\n") { tk ->
             "• ${tk.title}" + if (tk.dueMillis > 0) " (${df.format(java.util.Date(tk.dueMillis))})" else ""
         }
-        VoiceAccessibilityService.instance?.showStatusHold(formatForScreen("Задачи:\n$lines"), 22, 15000)
+        holdAnswer("Задачи: $spoken")
+        VoiceAccessibilityService.instance?.showStatusHold(formatForScreen("Задачи:\n$lines"), 26, 0L)
     }
 
     /** Старт свободного захвата вопроса к памяти. */
@@ -1157,7 +1212,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             post {
                 aiThinking = false
                 speak(text)
-                VoiceAccessibilityService.instance?.showStatusHold(formatForScreen(text), 22, 25000)
+                holdAnswer(text)
+                VoiceAccessibilityService.instance?.showStatusHold(formatForScreen(text), 26, 0L)
                 restartListening(); resetIdle()
             }
         }.start()
@@ -1174,7 +1230,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             post {
                 aiThinking = false
                 speak(ans)
-                VoiceAccessibilityService.instance?.showStatusHold("🧠 " + formatForScreen(ans), 22, 20000)
+                holdAnswer(ans)
+                VoiceAccessibilityService.instance?.showStatusHold("🧠 " + formatForScreen(ans), 26, 0L)
                 restartListening(); resetIdle()
             }
         }.start()
@@ -1218,15 +1275,22 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             return
         }
 
-        // Во время озвучки: реагируем ТОЛЬКО на прерывание «Иван + хватит/стоп».
+        // Во время озвучки: реагируем ТОЛЬКО на «Иван + хватит/стоп» (прервать) или «Иван + подробнее» (расширить).
         if (isSpeaking) {
             val stopWord = text.contains("хватит") || text.contains("стоп") || text.contains("молчи") ||
                 text.contains("замолчи") || text.contains("тихо") || text.contains("прекрати")
-            if (text.contains(wakeWord) && stopWord) {
-                stopSpeaking()
-                Logger.log("REC", "Озвучка прервана голосом: '$text'")
-            } else {
-                Logger.log("REC", "Игнор (говорит синтезатор): '$text'")
+            val moreWord = text.contains("подробнее") || text.contains("подробней") ||
+                text.contains("поподробнее") || text.contains("развёрнут") || text.contains("развернут")
+            when {
+                text.contains(wakeWord) && stopWord -> {
+                    stopSpeaking(); Logger.log("REC", "Озвучка прервана голосом: '$text'")
+                }
+                text.contains(wakeWord) && moreWord && lastAiQuestion.isNotBlank() -> {
+                    stopSpeaking()
+                    Logger.log("REC", "Озвучка прервана — запрошено подробнее")
+                    handleAi(true, "$lastAiQuestion. Ответь подробно и развёрнуто.")
+                }
+                else -> Logger.log("REC", "Игнор (говорит синтезатор): '$text'")
             }
             return
         }
@@ -1570,8 +1634,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 }
                 dialogTriggers.any { text.contains(it) } -> {
                     aiDialog = true
-                    speak("Давайте поговорим. Чтобы закончить — скажите «хватит».")
-                    startAiQuery(true); return
+                    // прогреем погоду в фоне — чтобы в светской беседе («как дела») Иван мог её обыграть
+                    Thread { runCatching { if (Weather.cached() == null) Weather.describe(this) } }.start()
+                    // слушать начинаем ТОЛЬКО после вступления (иначе рестарт распознавания во время речи)
+                    speakThen("Давайте поговорим. Чтобы закончить — скажите «хватит».") { startAiQuery(true) }
+                    return
                 }
                 composeTriggers.any { text.contains(it) } -> { startAiQuery(false); return }
                 askTriggers.any { text.contains(it) } -> { startAiQuery(true); return }
@@ -1617,14 +1684,14 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                     s.contains("недел") || s.contains("ближайш") || s.contains("несколько дн") || s.contains("на дни") -> Weather.week(this)
                     else -> Weather.describe(this)
                 }
-                post { speak(w) }
+                post { speakAndHold(w, "☁️") }
             }.start()
             return
         }
         if (text.contains("нового") || text.contains("новенького") ||
             text.contains("прочитай уведомл") || text.contains("зачитай уведомл") || text.contains("какие уведомл")) {
             Logger.log("CMD", "Чтение уведомлений")
-            speak(NotificationService.recentSummary(this, 5))
+            speakAndHold(NotificationService.recentSummary(this, 5), "🔔")
             return
         }
         run {
@@ -1636,7 +1703,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 (dayWord && !dateTimeQ)) {
                 val off = if (text.contains("завтра")) 1 else 0
                 Logger.log("CMD", "Календарь (день +$off)")
-                speak(CalendarReader.daySummary(this, off))
+                speakAndHold(CalendarReader.daySummary(this, off), "🗓")
                 return
             }
         }

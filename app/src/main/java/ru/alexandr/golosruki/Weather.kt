@@ -14,6 +14,13 @@ import kotlin.math.roundToInt
  */
 object Weather {
 
+    @Volatile private var lastSummary: String = ""
+    @Volatile private var lastAt: Long = 0L
+
+    /** Последняя успешно полученная сводка текущей погоды, если не старше maxAgeMs (для подмешивания в диалог). */
+    fun cached(maxAgeMs: Long = 2 * 60 * 60 * 1000L): String? =
+        if (lastSummary.isNotBlank() && System.currentTimeMillis() - lastAt < maxAgeMs) lastSummary else null
+
     fun describe(ctx: Context): String {
         val loc = lastLocation(ctx)
             ?: return "Не могу определить местоположение для погоды. Нужны разрешение «Геолокация» и включённый GPS."
@@ -27,7 +34,9 @@ object Weather {
             val feels = cur.getDouble("apparent_temperature").roundToInt()
             val code = cur.getInt("weather_code")
             val wind = cur.getDouble("wind_speed_10m").roundToInt()
-            "Сейчас ${desc(code)}, $temp°C (ощущается как $feels°C), ветер $wind км/ч."
+            val out = "Сейчас ${desc(code)}, $temp°C (ощущается как $feels°C), ветер $wind км/ч."
+            lastSummary = out; lastAt = System.currentTimeMillis()
+            out
         } catch (e: Exception) {
             "Не удалось получить погоду — проверьте интернет."
         }

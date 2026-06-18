@@ -49,6 +49,55 @@ object ReminderScheduler {
         runCatching { am(ctx).cancel(svcPending(ctx, id, ACTION_REMINDER, "")) }
     }
 
+    // --- Напоминания-объекты (разовые и повторяющиеся), отдельно от событий календаря ---
+
+    private fun reminderPending(ctx: Context, r: Reminder): PendingIntent {
+        val i = Intent(ctx, VoiceRecognitionService::class.java).apply {
+            action = ACTION_REMINDER
+            putExtra("text", "Напоминание. ${r.text}")
+            putExtra("rid", r.id)
+            putExtra("repeat_min", r.repeatMin)
+        }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getForegroundService(ctx, r.id.hashCode(), i, flags)
+    }
+
+    /** Ближайшее будущее срабатывание для повторяющегося напоминания (пропуская прошедшие). */
+    fun nextOccurrence(atMillis: Long, repeatMin: Int): Long {
+        if (repeatMin <= 0) return atMillis
+        var t = atMillis
+        val now = System.currentTimeMillis()
+        val step = repeatMin * 60_000L
+        while (t <= now) t += step
+        return t
+    }
+
+    fun scheduleReminderItem(ctx: Context, r: Reminder) {
+        val at = if (r.repeatMin > 0) nextOccurrence(r.atMillis, r.repeatMin) else r.atMillis
+        if (at <= System.currentTimeMillis()) return
+        setExact(ctx, at, reminderPending(ctx, r))
+        Logger.log("SEC", "Напоминание поставлено: '${r.text}' на $at" + if (r.repeatMin > 0) " (повтор каждые ${r.repeatMin} мин)" else "")
+    }
+
+    fun cancelReminderItem(ctx: Context, id: String) {
+        val dummy = Reminder(id, "", 0, 0, "active", 0)
+        runCatching { am(ctx).cancel(reminderPending(ctx, dummy)) }
+    }
+
+    /** Перевзвести все активные напоминания (после перезагрузки/перезапуска). */
+    fun rearmReminders(ctx: Context) {
+        val m = Secretary.mem(ctx)
+        for (r in m.reminders()) {
+            if (r.repeatMin > 0) {
+                val next = nextOccurrence(r.atMillis, r.repeatMin)
+                if (next != r.atMillis) m.updateReminderTime(r.id, next)
+                scheduleReminderItem(ctx, r.copy(atMillis = next))
+            } else if (r.atMillis > System.currentTimeMillis()) {
+                scheduleReminderItem(ctx, r)
+            }
+        }
+    }
+
     /** Текст голосового напоминания о задаче. */
     fun reminderText(t: Task): String {
         val sb = StringBuilder("Напоминание. ${t.title}")
@@ -92,5 +141,5 @@ object ReminderScheduler {
         }
     }
 
-    fun rearmAll(ctx: Context) { rearmBriefing(ctx); rearmTasks(ctx) }
+    fun rearmAll(ctx: Context) { rearmBriefing(ctx); rearmTasks(ctx); rearmReminders(ctx) }
 }

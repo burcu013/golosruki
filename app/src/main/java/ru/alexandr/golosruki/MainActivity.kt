@@ -51,6 +51,7 @@ class MainActivity : ComponentActivity() {
 
         val nav = UiKit.card(this)
         nav.addView(UiKit.sectionHeader(this, "Разделы"))
+        nav.addView(UiKit.iconButton(this, "🗂 Дела — события, задачи, напоминания") { open(AgendaActivity::class.java) })
         nav.addView(UiKit.row2(this,
             UiKit.tile(this, "📖", "Гайд") { open(GuideActivity::class.java) },
             UiKit.tile(this, "⚙️", "Настройки", R.drawable.btn_amber) { open(SettingsActivity::class.java) }
@@ -194,7 +195,7 @@ class MainActivity : ComponentActivity() {
         card.addView(UiKit.sectionHeader(this, "О приложении"))
         card.addView(UiKit.body(this, "ГолосРуки — голосовое управление смартфоном для людей с ограниченными возможностями."))
         card.addView(UiKit.body(this, "Офлайн-распознавание речи, без интернета и без передачи данных."))
-        card.addView(UiKit.body(this, "Версия 7.8 • Разработчик: Донбасс Реклама"))
+        card.addView(UiKit.body(this, "Версия 8.2 • Разработчик: Донбасс Реклама"))
         return card
     }
 

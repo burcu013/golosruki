@@ -18,7 +18,9 @@ data class PlanResult(
     val reminderMin: Int,
     val startMillis: Long,
     val allDay: Boolean,
-    val error: String = ""
+    val error: String = "",
+    val kind: String = "event",     // event | task | reminder
+    val repeatMin: Int = 0          // напоминание: 0 разовое, 1440 ежедневно, 10080 еженедельно, N каждые N мин
 )
 
 /** Планировщик-секретарь: свободная фраза → структурированное событие (через облачный LLM). */
@@ -30,18 +32,19 @@ object Secretary {
 
     private val ru = Locale("ru")
 
-    fun plan(ctx: Context, text: String): PlanResult {
+    fun plan(ctx: Context, text: String, hintKind: String = "event"): PlanResult {
         val m = mem(ctx)
         val now = Calendar.getInstance()
         val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm, EEEE", ru).format(now.time)
         val projects = m.projects().joinToString(", ").ifBlank { "—" }
         val people = m.people().joinToString(", ").ifBlank { "—" }
 
-        val system = "Ты — планировщик-секретарь. Преобразуй фразу пользователя в ОДНО событие календаря. " +
+        val system = "Ты — планировщик-секретарь. Преобразуй фразу пользователя в ОДНУ запись. " +
             "Ответь ТОЛЬКО объектом JSON, без пояснений и markdown. Поля: " +
             "title (о чём, кратко), person (с кем или пустая строка), project (проект/дело или пустая строка), " +
-            "date (YYYY-MM-DD), time (HH:MM в 24-часовом формате или пустая строка), " +
-            "duration_min (целое, по умолчанию 60), reminder_min (за сколько минут напомнить, по умолчанию 0), " +
+            "date (YYYY-MM-DD или пустая строка, если дата не нужна), time (HH:MM в 24-часовом формате или пустая строка), " +
+            "duration_min (целое, по умолчанию 60), reminder_min (за сколько минут напомнить о событии, по умолчанию 0), " +
+            "repeat_min (для повторяющихся напоминаний: 0 — разово, 1440 — каждый день, 10080 — каждую неделю, 60 — каждый час, либо число минут для «каждые N минут/часов»), " +
             "note (детали или пустая строка). " +
             "Относительные даты («сегодня», «завтра», «в четверг», «через неделю») переводи в абсолютную дату от текущей. " +
             "Время суток словами: утро=10:00, день=14:00, вечер=19:00. Если время не названо — оставь time пустым. " +
@@ -51,7 +54,7 @@ object Secretary {
 
         val raw = CloudAi.chat(ctx, system, user)
             ?: return PlanResult(false, "", "", "", "", 60, 0, 0, false, CloudAi.lastError.ifBlank { "нет ответа модели" })
-        val obj = extractJson(raw) ?: return PlanResult(false, "", "", "", "", 60, 0, 0, false, "не понял план")
+        val obj = extractJson(raw) ?: return PlanResult(false, "", "", "", "", 60, 0, 0, false, "не понял")
 
         val title = obj.optString("title").trim()
         val person = obj.optString("person").trim()
@@ -59,32 +62,49 @@ object Secretary {
         val note = obj.optString("note").trim()
         val duration = obj.optInt("duration_min", 60).coerceIn(15, 600)
         val reminder = obj.optInt("reminder_min", 0).coerceIn(0, 10080)
+        val repeatMin = obj.optInt("repeat_min", 0).coerceIn(0, 100000)
         val date = obj.optString("date").trim()
         val time = obj.optString("time").trim()
 
         if (title.isBlank()) return PlanResult(false, "", "", "", "", duration, reminder, 0, false, "не понял суть")
-        if (date.isBlank() || !date.matches(Regex("\\d{4}-\\d{2}-\\d{2}")))
-            return PlanResult(false, title, person, project, note, duration, reminder, 0, false, "не понял дату")
 
-        val allDay = time.isBlank() || !time.matches(Regex("\\d{1,2}:\\d{2}"))
-        // Напоминание по умолчанию, если не названо: за 30 мин (со временем) / заранее (на весь день).
-        val reminderFinal = if (reminder > 0) reminder else if (allDay) 540 else 30
-        val cal = Calendar.getInstance()
-        try {
-            val d = SimpleDateFormat("yyyy-MM-dd", ru).parse(date) ?: throw IllegalArgumentException()
-            cal.time = d
-            if (!allDay) {
-                val hm = time.split(":")
-                cal.set(Calendar.HOUR_OF_DAY, hm[0].toInt())
-                cal.set(Calendar.MINUTE, hm[1].toInt())
-            } else {
-                cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0)
-            }
-            cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
-        } catch (e: Exception) {
-            return PlanResult(false, title, person, project, note, duration, reminder, 0, false, "не понял дату")
+        val hasDate = date.matches(Regex("\\d{4}-\\d{2}-\\d{2}"))
+        val hasTime = time.matches(Regex("\\d{1,2}:\\d{2}"))
+        // Вычисляем момент времени, если есть дата (и опц. время).
+        var startMillis = 0L
+        if (hasDate) {
+            val cal = Calendar.getInstance()
+            try {
+                val d = SimpleDateFormat("yyyy-MM-dd", ru).parse(date)!!
+                cal.time = d
+                if (hasTime) { val hm = time.split(":"); cal.set(Calendar.HOUR_OF_DAY, hm[0].toInt()); cal.set(Calendar.MINUTE, hm[1].toInt()) }
+                else { cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0) }
+                cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
+                startMillis = cal.timeInMillis
+            } catch (e: Exception) { startMillis = 0L }
         }
-        return PlanResult(true, title, person, project, note, duration, reminderFinal, cal.timeInMillis, allDay)
+        val allDay = !hasTime
+
+        // Маршрутизация по намерению (тип задаёт фраза-триггер).
+        var kind = hintKind
+        // Напоминание без конкретного времени превращаем в задачу (нечего «звонить»).
+        if (kind == "reminder" && (!hasDate || !hasTime)) kind = "task"
+
+        return when (kind) {
+            "task" -> PlanResult(true, title, person, project, note, duration, reminder,
+                startMillis, allDay, "", "task", 0)
+            "reminder" -> {
+                var sm = startMillis
+                if (repeatMin == 0 && sm in 1..System.currentTimeMillis()) sm += 86_400_000L  // время уже прошло — на завтра
+                PlanResult(true, title, person, project, note, duration, 0,
+                    sm, false, "", "reminder", repeatMin)
+            }
+            else -> { // event
+                if (startMillis == 0L) return PlanResult(false, title, person, project, note, duration, reminder, 0, false, "не понял дату")
+                val reminderFinal = if (reminder > 0) reminder else if (allDay) 540 else 30
+                PlanResult(true, title, person, project, note, duration, reminderFinal, startMillis, allDay, "", "event", 0)
+            }
+        }
     }
 
     /** Ответ на вопрос по памяти (этап B). Онлайн — LLM по релевантному срезу; офлайн — локальный список. */
@@ -124,7 +144,21 @@ object Secretary {
     }
 
     /** Фраза для голосового подтверждения. */
+    /** Человеческое описание периодичности напоминания. */
+    fun repeatPhrase(repeatMin: Int): String = when {
+        repeatMin <= 0 -> ""
+        repeatMin == 1440 -> ", каждый день"
+        repeatMin == 10080 -> ", каждую неделю"
+        repeatMin % 1440 == 0 -> ", каждые ${repeatMin / 1440} дн."
+        repeatMin % 60 == 0 -> ", каждые ${repeatMin / 60} ч."
+        else -> ", каждые $repeatMin мин."
+    }
+
     fun confirmPhrase(p: PlanResult): String {
+        if (p.kind == "reminder") {
+            val whenStr = SimpleDateFormat("EEEE d MMMM, HH:mm", ru).format(Date(p.startMillis))
+            return "Напоминать: ${p.title} — $whenStr${repeatPhrase(p.repeatMin)}. Скажите да или нет."
+        }
         val whenStr = if (p.allDay)
             SimpleDateFormat("EEEE d MMMM", ru).format(Date(p.startMillis)) + ", весь день"
         else
@@ -161,12 +195,16 @@ object Secretary {
         val endToday = cal.apply {
             set(Calendar.HOUR_OF_DAY, 23); set(Calendar.MINUTE, 59); set(Calendar.SECOND, 59)
         }.timeInMillis
-        val tasks = mem(ctx).openTasks().filter { it.dueMillis in 1..endToday }
+        val now = System.currentTimeMillis()
+        val open = mem(ctx).openTasks()
+        val overdue = open.filter { it.dueMillis in 1 until now }
+        val tasks = open.filter { it.dueMillis in now..endToday }
         val tasksStr = if (tasks.isEmpty()) "Задач на сегодня нет."
             else "Задачи на сегодня: " + tasks.joinToString(", ") { it.title } + "."
+        val overdueStr = if (overdue.isEmpty()) "" else " Просрочено: " + overdue.joinToString(", ") { it.title } + "."
         val weather = runCatching { Weather.describe(ctx) }.getOrNull()
             ?.takeIf { it.isNotBlank() && !it.contains("не удал", true) && !it.contains("ошибк", true) && !it.contains("нет доступ", true) }
-        val sb = StringBuilder("$greet. $events $tasksStr")
+        val sb = StringBuilder("$greet. $events $tasksStr$overdueStr")
         if (weather != null) sb.append(" Погода: $weather")
         return sb.toString()
     }

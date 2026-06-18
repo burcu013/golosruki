@@ -18,6 +18,16 @@ data class Task(
     val created: Long
 )
 
+/** Повторяющееся/разовое голосовое напоминание (отдельно от задач и событий). */
+data class Reminder(
+    val id: String,
+    val text: String,
+    val atMillis: Long,         // ближайшее время срабатывания
+    val repeatMin: Int,         // 0 — разовое; 1440 — ежедневно; 10080 — еженедельно; N — каждые N минут
+    var status: String,         // active / done
+    val created: Long
+)
+
 /**
  * Память секретаря. Абстракция: сейчас локальная (JSON в файле), позже — Джарвис-сервер
  * (та же сигнатура, другая реализация). Данные хранятся в простом JSON — легко выгрузить и перенести.
@@ -30,6 +40,10 @@ interface SecretaryMemory {
     fun recentLog(limit: Int): List<String>
     fun completeTask(id: String)
     fun clearDone(): Int
+    fun addReminder(r: Reminder)
+    fun reminders(): List<Reminder>                 // активные напоминания
+    fun updateReminderTime(id: String, atMillis: Long)
+    fun completeReminder(id: String)
     fun people(): List<String>
     fun projects(): List<String>
     fun learn(project: String?, person: String?)   // запомнить новый проект/человека
@@ -110,6 +124,42 @@ class LocalMemory(private val ctx: Context) : SecretaryMemory {
         }
         if (removed > 0) { root.put("tasks", keep); save() }
         return removed
+    }
+
+    override fun addReminder(r: Reminder) {
+        val o = JSONObject().apply {
+            put("id", r.id); put("text", r.text); put("at", r.atMillis)
+            put("repeat", r.repeatMin); put("status", r.status); put("created", r.created)
+        }
+        arr("reminders").put(o)
+        save()
+    }
+
+    override fun reminders(): List<Reminder> {
+        val a = arr("reminders"); val out = ArrayList<Reminder>()
+        for (i in 0 until a.length()) {
+            val o = a.getJSONObject(i)
+            if (o.optString("status", "active") != "active") continue
+            out.add(Reminder(o.optString("id"), o.optString("text"), o.optLong("at"),
+                o.optInt("repeat"), o.optString("status", "active"), o.optLong("created")))
+        }
+        return out.sortedBy { it.atMillis }
+    }
+
+    override fun updateReminderTime(id: String, atMillis: Long) {
+        val a = arr("reminders")
+        for (i in 0 until a.length()) {
+            val o = a.getJSONObject(i)
+            if (o.optString("id") == id) { o.put("at", atMillis); save(); return }
+        }
+    }
+
+    override fun completeReminder(id: String) {
+        val a = arr("reminders")
+        for (i in 0 until a.length()) {
+            val o = a.getJSONObject(i)
+            if (o.optString("id") == id) { o.put("status", "done"); save(); return }
+        }
     }
 
     private val stop = setOf("что", "как", "где", "когда", "кто", "это", "мне", "нас", "про",

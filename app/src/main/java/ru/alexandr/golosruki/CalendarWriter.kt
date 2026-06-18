@@ -92,4 +92,15 @@ object CalendarWriter {
             true
         } catch (e: Exception) { Logger.log("SEC", "Запись события: ${e.message}"); false }
     }
+
+    /** Удаляет событие календаря по EVENT_ID. Требует WRITE_CALENDAR. */
+    fun delete(ctx: Context, eventId: Long): Boolean {
+        if (!canWrite(ctx)) { Logger.log("SEC", "Нет WRITE_CALENDAR для удаления"); return false }
+        return try {
+            val uri = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId)
+            val n = ctx.contentResolver.delete(uri, null, null)
+            Logger.log("SEC", "Событие удалено (id=$eventId): строк $n")
+            n > 0
+        } catch (e: Exception) { Logger.log("SEC", "Удаление события: ${e.message}"); false }
+    }
 }

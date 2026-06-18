@@ -282,7 +282,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var pendingCall: Pair<String, String>? = null   // имя -> номер (ожидает «да»)
     private var pendingContactChoice: List<Contacts.C>? = null   // несколько совпадений — ждём номер выбора
     private var pendingPlan: PlanResult? = null   // разобранный план — ждёт подтверждения «да/нет»
+    private var planKind = "event"                // тип создаваемой записи: event | task | reminder
     private var pendingTaskDone: List<Task>? = null   // выбор задачи для завершения (по номеру)
+    private var pendingReminderCancel: List<Reminder>? = null   // выбор напоминания для отмены (по номеру)
+    private var pendingEventCancel: List<CalendarReader.EventItem>? = null   // выбор события для отмены (по номеру)
     private var pendingGestureCalib = false                  // ожидает подтверждения записи жеста
 
     private val idleRunnable = Runnable {
@@ -351,7 +354,20 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             ACTION_RELOAD -> reloadModel()
             ACTION_APPLY -> applySettings()
             ACTION_DEEP_SLEEP -> enterDeepSleep()
-            ReminderScheduler.ACTION_REMINDER -> intent.getStringExtra("text")?.let { speakReminderSoon(it, 0) }
+            ReminderScheduler.ACTION_REMINDER -> {
+                intent.getStringExtra("text")?.let { speakReminderSoon(it, 0) }
+                // повторяющееся напоминание — перевзвести на следующий раз
+                val rid = intent.getStringExtra("rid")
+                if (rid != null) {
+                    val m = Secretary.mem(this)
+                    val rem = m.reminders().firstOrNull { it.id == rid }
+                    if (rem != null && rem.repeatMin > 0) {
+                        val next = ReminderScheduler.nextOccurrence(System.currentTimeMillis() + 1000, rem.repeatMin)
+                        m.updateReminderTime(rid, next)
+                        ReminderScheduler.scheduleReminderItem(this, rem.copy(atMillis = next))
+                    }
+                }
+            }
             ReminderScheduler.ACTION_BRIEFING -> {
                 handler.postDelayed({ speakBriefing() }, 1500)   // дать TTS/службе подняться, если старт «холодный»
                 ReminderScheduler.rearmBriefing(this)            // перевзвести на следующий день
@@ -547,7 +563,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     /** Активно ли окно, ожидающее выбора/подтверждения голосом (его нельзя гасить по окончании речи). */
     private fun hasPendingHold(): Boolean =
-        pendingContactChoice != null || pendingPlan != null || pendingTaskDone != null || answerHeld
+        pendingContactChoice != null || pendingPlan != null || pendingTaskDone != null || pendingReminderCancel != null || pendingEventCancel != null || answerHeld
 
     /** Прервать текущую озвучку голосом и вернуться к слушанию. */
     private fun stopSpeaking() {
@@ -1019,7 +1035,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         }
         handler.removeCallbacks(idleRunnable)
         aiListening = false; aiDialog = false; planning = false; querying = false
-        pendingPlan = null; pendingTaskDone = null; pendingContactChoice = null; pendingCall = null
+        pendingPlan = null; pendingTaskDone = null; pendingReminderCancel = null; pendingEventCancel = null; pendingContactChoice = null; pendingCall = null
         if (dictation) exitDictation()
         deepSleep = true
         state = State.ASLEEP
@@ -1121,17 +1137,23 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     // ===== Секретарь (этап A) =====
 
     /** Старт свободного захвата плана. Требует онлайн-модель. */
-    fun startPlanQuery() {
+    fun startPlanQuery(kind: String = "event") {
         if (!(CloudAi.isConfigured(this) && Net.isOnline(this))) {
             VoiceAccessibilityService.instance?.showStatus("📝 Для секретаря нужны онлайн-модель и интернет")
             speak("Для планирования нужна онлайн-модель и интернет. Включите её в настройках.")
             return
         }
+        planKind = kind
         planning = true
         aiListening = true
         aiAsk = false
-        VoiceAccessibilityService.instance?.showStatus("📝 Слушаю план… говорите, что запланировать")
-        Logger.log("SEC", "Захват плана")
+        val prompt = when (kind) {
+            "reminder" -> "🔔 Слушаю напоминание… когда и о чём напомнить"
+            "task" -> "🗂 Слушаю задачу… что добавить в дела"
+            else -> "📝 Слушаю план… что запланировать"
+        }
+        VoiceAccessibilityService.instance?.showStatus(prompt)
+        Logger.log("SEC", "Захват ($kind)")
         restartListening()   // свободное распознавание
         resetIdle()
     }
@@ -1140,32 +1162,65 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (text.isBlank()) { restartListening(); resetIdle(); return }
         aiThinking = true
         handler.removeCallbacks(idleRunnable)
-        VoiceAccessibilityService.instance?.showStatus("📝 Обрабатываю план…")
-        Logger.log("SEC", "План: '$text'")
+        VoiceAccessibilityService.instance?.showStatus("📝 Обрабатываю…")
+        Logger.log("SEC", "План ($planKind): '$text'")
+        val kind = planKind
         Thread {
-            val p = Secretary.plan(this, text)
-            val conflict = if (p.ok && !p.allDay) {
+            val p = Secretary.plan(this, text, kind)
+            val conflict = if (p.ok && p.kind == "event" && !p.allDay) {
                 val busy = CalendarReader.busyBetween(this, p.startMillis, p.startMillis + p.durationMin * 60_000L)
                 if (busy.isNotEmpty()) "Внимание: в это время уже есть — ${busy.joinToString(", ")}. " else ""
             } else ""
             post {
                 aiThinking = false
-                restartListening(); resetIdle()   // вернуть Vosk для «да/нет»
+                restartListening(); resetIdle()
                 if (!p.ok) {
                     speak("Не получилось: ${p.error}. Повторите по-другому.")
-                    VoiceAccessibilityService.instance?.showStatus("Не понял план: ${p.error}")
+                    VoiceAccessibilityService.instance?.showStatus("Не понял: ${p.error}")
+                } else if (p.kind == "task") {
+                    addPlannedTask(p)   // задачу добавляем сразу, без «да/нет»
                 } else {
                     pendingPlan = p
                     val card = Secretary.confirmPhrase(p).removeSuffix(" Скажите да или нет.")
                     VoiceAccessibilityService.instance?.showStatusHold("$conflict$card\nСкажите «да» или «нет»", 7, 31000)
                     speak(conflict + Secretary.confirmPhrase(p))
-                    handler.postDelayed({ if (pendingPlan === p) { pendingPlan = null; Logger.log("SEC", "Подтверждение плана истекло") } }, 30000)
+                    handler.postDelayed({ if (pendingPlan === p) { pendingPlan = null; Logger.log("SEC", "Подтверждение истекло") } }, 30000)
                 }
             }
         }.start()
     }
 
+    /** Добавить задачу сразу (без подтверждения) — это «дело» со статусом, без блокировки времени. */
+    private fun addPlannedTask(p: PlanResult) {
+        val m = Secretary.mem(this)
+        val task = Task(java.util.UUID.randomUUID().toString(), p.title, p.person, p.project,
+            p.startMillis, 0, p.note, "open", System.currentTimeMillis())
+        m.addTask(task)
+        m.log("Задача: ${p.title}; проект=${p.project}; с=${p.person}")
+        val due = if (p.startMillis > 0)
+            " на " + java.text.SimpleDateFormat("d MMMM", java.util.Locale("ru")).format(java.util.Date(p.startMillis)) else ""
+        speak("Добавил задачу: ${p.title}$due")
+        VoiceAccessibilityService.instance?.showStatus("🗂 Задача: ${p.title}")
+    }
+
     private fun commitPlan(p: PlanResult) {
+        if (p.kind == "reminder") {
+            val r = Reminder(java.util.UUID.randomUUID().toString(), p.title, p.startMillis, p.repeatMin,
+                "active", System.currentTimeMillis())
+            Thread {
+                val m = Secretary.mem(this)
+                m.addReminder(r)
+                ReminderScheduler.scheduleReminderItem(this, r)
+                m.log("Напоминание: ${p.title}; повтор=${p.repeatMin}")
+                post {
+                    speak("Готово. Буду напоминать: ${p.title}${Secretary.repeatPhrase(p.repeatMin)}")
+                    VoiceAccessibilityService.instance?.showStatus("🔔 ${p.title}")
+                    restartListening(); resetIdle()
+                }
+            }.start()
+            return
+        }
+        // Событие календаря
         VoiceAccessibilityService.instance?.showStatus("📝 Записываю…")
         val taskId = java.util.UUID.randomUUID().toString()
         Thread {
@@ -1204,6 +1259,134 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         }
         holdAnswer("Задачи: $spoken")
         VoiceAccessibilityService.instance?.showStatusHold(formatForScreen("Задачи:\n$lines"), 26, 0L)
+    }
+
+    /** Единая повестка: события дня + задачи на сегодня/просроченные + активные напоминания. */
+    private fun speakAgenda() {
+        VoiceAccessibilityService.instance?.showStatus("🗂 Собираю повестку…")
+        Thread {
+            val m = Secretary.mem(this)
+            val endToday = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.HOUR_OF_DAY, 23); set(java.util.Calendar.MINUTE, 59); set(java.util.Calendar.SECOND, 59)
+            }.timeInMillis
+            val events = if (CalendarReader.hasAccess(this)) CalendarReader.daySummary(this, 0) else "Календарь недоступен."
+            val df = java.text.SimpleDateFormat("HH:mm", java.util.Locale("ru"))
+            val open = m.openTasks()
+            val dueToday = open.filter { it.dueMillis in 1..endToday }
+            val undated = open.count { it.dueMillis == 0L }
+            val rem = m.reminders()
+            val sb = StringBuilder(events.trimEnd('.', ' ')).append(". ")
+            if (dueToday.isNotEmpty()) sb.append("Задачи на сегодня: ").append(dueToday.joinToString(", ") { it.title }).append(". ")
+            else sb.append("Задач на сегодня нет. ")
+            if (undated > 0) sb.append("Ещё $undated без срока. ")
+            if (rem.isNotEmpty()) sb.append("Напоминания: ").append(rem.take(6).joinToString(", ") {
+                it.text + (if (it.repeatMin > 0) Secretary.repeatPhrase(it.repeatMin) else " в " + df.format(java.util.Date(it.atMillis)))
+            }).append(".")
+            val text = sb.toString().trim()
+            post { speakAndHold(text, "🗂") }
+        }.start()
+    }
+
+    /** Список активных напоминаний. */
+    private fun speakReminders() {
+        val rem = Secretary.mem(this).reminders()
+        if (rem.isEmpty()) { speak("Активных напоминаний нет"); VoiceAccessibilityService.instance?.showStatus("Напоминаний нет"); return }
+        val df = java.text.SimpleDateFormat("d MMMM HH:mm", java.util.Locale("ru"))
+        val spoken = "Напоминания: " + rem.take(7).joinToString(". ") { r ->
+            r.text + if (r.repeatMin > 0) Secretary.repeatPhrase(r.repeatMin) else ", " + df.format(java.util.Date(r.atMillis))
+        }
+        speakAndHold(spoken, "🔔")
+    }
+
+    /** Отмена напоминания по номеру (нумерованный выбор голосом). */
+    private fun startReminderCancel() {
+        val rem = Secretary.mem(this).reminders()
+        if (rem.isEmpty()) { speak("Активных напоминаний нет"); VoiceAccessibilityService.instance?.showStatus("Напоминаний нет"); return }
+        val top = rem.take(5)
+        pendingReminderCancel = top
+        val lines = top.mapIndexed { i, r -> "${i + 1}. ${r.text}" }.joinToString("\n")
+        VoiceAccessibilityService.instance?.showStatusHold("Какое напоминание отменить?\n$lines\nСкажите номер или «отмена»", top.size + 3, 21000)
+        speak("Какое напоминание отменить? " + top.mapIndexed { i, r -> "${ordinal(i + 1)} — ${r.text}" }.joinToString(". ") + ". Скажите номер.")
+        handler.postDelayed({ if (pendingReminderCancel === top) { pendingReminderCancel = null; Logger.log("SEC", "Выбор напоминания истёк") } }, 20000)
+    }
+
+    /** Свободные окна дня голосом («когда я свободен»). */
+    private fun speakFreeWindows(dayOffset: Int) {
+        if (!CalendarReader.hasAccess(this)) { speak("Нет доступа к календарю. Дайте его в настройках."); VoiceAccessibilityService.instance?.showStatus("Календарь недоступен"); return }
+        VoiceAccessibilityService.instance?.showStatus("🗓 Считаю свободное время…")
+        Thread {
+            val wins = CalendarReader.freeWindows(this, dayOffset)
+            val df = java.text.SimpleDateFormat("HH:mm", java.util.Locale("ru"))
+            val whenWord = if (dayOffset == 0) "сегодня" else "завтра"
+            val text = if (wins.isEmpty()) "Свободных окон $whenWord нет."
+                else "Свободно $whenWord: " + wins.take(6).joinToString(", ") {
+                    "${df.format(java.util.Date(it.first))}–${df.format(java.util.Date(it.second))}"
+                } + "."
+            post { speakAndHold(text, "🗓") }
+        }.start()
+    }
+
+    /** «Что горит»: просроченные задачи + ближайшие напоминания + ближайшее событие. */
+    private fun speakUrgent() {
+        VoiceAccessibilityService.instance?.showStatus("⚠️ Проверяю срочное…")
+        Thread {
+            val now = System.currentTimeMillis()
+            val m = Secretary.mem(this)
+            val overdue = m.openTasks().filter { it.dueMillis in 1 until now }
+            val soonRem = m.reminders().filter { it.atMillis in now..(now + 3 * 3600_000L) }
+            val df = java.text.SimpleDateFormat("HH:mm", java.util.Locale("ru"))
+            val nextEvent = if (CalendarReader.hasAccess(this))
+                CalendarReader.events(this, 0).firstOrNull { !it.allDay && it.begin > now } else null
+            val sb = StringBuilder()
+            if (overdue.isNotEmpty()) sb.append("Просрочено: ").append(overdue.joinToString(", ") { it.title }).append(". ")
+            if (soonRem.isNotEmpty()) sb.append("Скоро напоминания: ").append(soonRem.joinToString(", ") { it.text + " в " + df.format(java.util.Date(it.atMillis)) }).append(". ")
+            if (nextEvent != null) sb.append("Ближайшее событие: ${nextEvent.title} в ${df.format(java.util.Date(nextEvent.begin))}.")
+            val text = sb.toString().trim().ifBlank { "Ничего срочного. Просроченных задач нет." }
+            post { speakAndHold(text, "⚠️") }
+        }.start()
+    }
+
+    /** Вечерний разбор / план на завтра: события + задачи на завтра + свободные окна. */
+    private fun speakTomorrowPlan() {
+        VoiceAccessibilityService.instance?.showStatus("🌙 Планирую завтра…")
+        Thread {
+            val m = Secretary.mem(this)
+            val cal = java.util.Calendar.getInstance().apply {
+                add(java.util.Calendar.DAY_OF_YEAR, 1)
+                set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+            }
+            val start = cal.timeInMillis; val end = start + 24L * 60 * 60 * 1000
+            val events = if (CalendarReader.hasAccess(this)) CalendarReader.daySummary(this, 1) else "Календарь недоступен."
+            val tasks = m.openTasks().filter { it.dueMillis in start until end }
+            val wins = if (CalendarReader.hasAccess(this)) CalendarReader.freeWindows(this, 1) else emptyList()
+            val df = java.text.SimpleDateFormat("HH:mm", java.util.Locale("ru"))
+            val sb = StringBuilder(events.trimEnd('.', ' ')).append(". ")
+            if (tasks.isNotEmpty()) sb.append("Задачи на завтра: ").append(tasks.joinToString(", ") { it.title }).append(". ")
+            if (wins.isNotEmpty()) sb.append("Свободно: ").append(wins.take(4).joinToString(", ") {
+                "${df.format(java.util.Date(it.first))}–${df.format(java.util.Date(it.second))}"
+            }).append(".")
+            post { speakAndHold(sb.toString().trim(), "🌙") }
+        }.start()
+    }
+
+    /** Отмена события календаря по номеру (ближайшие сегодня+завтра). */
+    private fun startEventCancel() {
+        if (!CalendarReader.hasAccess(this)) { speak("Нет доступа к календарю."); VoiceAccessibilityService.instance?.showStatus("Календарь недоступен"); return }
+        VoiceAccessibilityService.instance?.showStatus("🗓 Ищу события…")
+        Thread {
+            val now = System.currentTimeMillis()
+            val list = (CalendarReader.events(this, 0) + CalendarReader.events(this, 1))
+                .filter { !it.allDay && it.end > now }.take(6)
+            post {
+                if (list.isEmpty()) { speak("Ближайших событий нет"); VoiceAccessibilityService.instance?.showStatus("Событий нет"); return@post }
+                pendingEventCancel = list
+                val df = java.text.SimpleDateFormat("d MMM HH:mm", java.util.Locale("ru"))
+                val lines = list.mapIndexed { i, e -> "${i + 1}. ${e.title} (${df.format(java.util.Date(e.begin))})" }.joinToString("\n")
+                VoiceAccessibilityService.instance?.showStatusHold("Какое событие отменить?\n$lines\nСкажите номер или «отмена»", list.size + 3, 21000)
+                speak("Какое событие отменить? " + list.mapIndexed { i, e -> "${ordinal(i + 1)} — ${e.title}" }.joinToString(". ") + ". Скажите номер.")
+                handler.postDelayed({ if (pendingEventCancel === list) { pendingEventCancel = null; Logger.log("SEC", "Выбор события истёк") } }, 20000)
+            }
+        }.start()
     }
 
     /** Старт свободного захвата вопроса к памяти. */
@@ -1602,6 +1785,58 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 }
             }
         }
+        pendingReminderCancel?.let { list ->
+            when {
+                text.contains("отмена") || text.contains("нет") || text.contains("стоп") -> {
+                    pendingReminderCancel = null
+                    VoiceAccessibilityService.instance?.releaseStatusHold()
+                    speak("Отменено"); VoiceAccessibilityService.instance?.showStatus("Отменено")
+                    return
+                }
+                else -> {
+                    val idx = choiceIndex(text)
+                    if (idx in 1..list.size) {
+                        val r = list[idx - 1]; pendingReminderCancel = null
+                        VoiceAccessibilityService.instance?.releaseStatusHold()
+                        val m = Secretary.mem(this)
+                        ReminderScheduler.cancelReminderItem(this, r.id)
+                        m.completeReminder(r.id); m.log("Напоминание отменено: ${r.text}")
+                        Logger.log("SEC", "Напоминание отменено: ${r.text}")
+                        speak("Отменил напоминание: ${r.text}")
+                        VoiceAccessibilityService.instance?.showStatus("🔕 ${r.text}")
+                    } else Logger.log("SEC", "Выбор напоминания не распознан: '$text'")
+                    return
+                }
+            }
+        }
+        pendingEventCancel?.let { list ->
+            when {
+                text.contains("отмена") || text.contains("нет") || text.contains("стоп") -> {
+                    pendingEventCancel = null
+                    VoiceAccessibilityService.instance?.releaseStatusHold()
+                    speak("Отменено"); VoiceAccessibilityService.instance?.showStatus("Отменено")
+                    return
+                }
+                else -> {
+                    val idx = choiceIndex(text)
+                    if (idx in 1..list.size) {
+                        val ev = list[idx - 1]; pendingEventCancel = null
+                        VoiceAccessibilityService.instance?.releaseStatusHold()
+                        VoiceAccessibilityService.instance?.showStatus("🗓 Отменяю…")
+                        Thread {
+                            val ok = CalendarWriter.delete(this, ev.id)
+                            Secretary.mem(this).log("Событие отменено: ${ev.title}")
+                            Logger.log("SEC", "Событие отменено: ${ev.title} (ok=$ok)")
+                            post {
+                                speak(if (ok) "Отменил событие: ${ev.title}" else "Не смог отменить — нет доступа на запись календаря")
+                                VoiceAccessibilityService.instance?.showStatus(if (ok) "🗑 ${ev.title}" else "Нет доступа к записи календаря")
+                            }
+                        }.start()
+                    } else Logger.log("SEC", "Выбор события не распознан: '$text'")
+                    return
+                }
+            }
+        }
         // Ожидание выбора контакта из нескольких совпадений
         pendingContactChoice?.let { list ->
             when {
@@ -1676,8 +1911,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
         // Секретарь: планирование/брифинг/задачи — РАНЬШЕ погоды/календаря («запланируй» содержит «план»)
         run {
-            val planTriggers = listOf("запланируй", "запланировать", "назначь", "назначить",
-                "добавь встречу", "добавь событие", "поставь встречу", "запиши план", "планирую", "напомни", "напомнить")
+            val reminderCreate = listOf("напомни", "напоминай", "напоминать", "напоминание")
+            val taskCreate = listOf("добавь задачу", "новая задача", "поставь задачу", "запиши задачу",
+                "создай задачу", "не забудь", "не забыть")
+            val eventCreate = listOf("запланируй", "запланировать", "назначь", "назначить",
+                "добавь встречу", "добавь событие", "поставь встречу", "запиши план", "планирую", "событие", "созвон")
             val taskTriggers = listOf("мои задачи", "список задач", "какие задачи", "что в задачах", "задачи на сегодня")
             val briefTriggers = listOf("брифинг", "сводка", "сводку", "план на день", "доброе утро", "что на сегодня")
             // Устойчивое распознавание по ОСНОВАМ слов (Vosk даёт варианты: «задачи/задачу», «выполнено/выполнена»).
@@ -1687,8 +1925,28 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             val doneTask = (hasTask && (text.contains("заверши") || text.contains("закро") ||
                 text.contains("закрыть") || text.contains("отметь") || text.contains("выполн"))) ||
                 text.trim() == "выполнено" || text.trim() == "готово"
+            val agendaTriggers = listOf("повестка", "повестку", "мои дела", "все дела", "что по плану")
+            val remindersList = listOf("мои напоминания", "какие напоминания", "список напоминаний",
+                "все напоминания", "покажи напоминания")
+            val cancelReminder = (text.contains("отмени") || text.contains("удали") || text.contains("убери")) &&
+                text.contains("напоминан")
+            val cancelEvent = (text.contains("отмени") || text.contains("удали") || text.contains("убери")) &&
+                (text.contains("встреч") || text.contains("событи"))
+            val freeQuery = text.contains("свободен") || text.contains("свободное время") || text.contains("когда свободен")
+            val urgentQuery = text.contains("что горит") || text.contains("что срочно") ||
+                text.contains("просрочк") || text.contains("просрочен") || text.contains("что важно")
+            val tomorrowPlan = text.contains("спланируй завтра") || text.contains("разбор дня") ||
+                text.contains("план на завтра") || text.contains("планы на завтра")
             when {
-                planTriggers.any { text.contains(it) } -> { startPlanQuery(); return }
+                cancelReminder -> { startReminderCancel(); return }
+                cancelEvent -> { startEventCancel(); return }
+                freeQuery -> { speakFreeWindows(if (text.contains("завтра")) 1 else 0); return }
+                urgentQuery -> { speakUrgent(); return }
+                tomorrowPlan -> { speakTomorrowPlan(); return }
+                remindersList.any { text.contains(it) } -> { speakReminders(); return }
+                agendaTriggers.any { text.contains(it) } -> { speakAgenda(); return }
+                reminderCreate.any { text.contains(it) } -> { startPlanQuery("reminder"); return }
+                taskCreate.any { text.contains(it) } -> { startPlanQuery("task"); return }
                 briefTriggers.any { text.contains(it) } -> { speakBriefing(); return }
                 clearTask -> {
                     val n = Secretary.mem(this).clearDone()
@@ -1697,6 +1955,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 }
                 doneTask -> { startTaskComplete(); return }
                 taskTriggers.any { text.contains(it) } || text.trim() == "задачи" -> { speakTasks(); return }
+                eventCreate.any { text.contains(it) } -> { startPlanQuery("event"); return }
                 else -> {}
             }
         }

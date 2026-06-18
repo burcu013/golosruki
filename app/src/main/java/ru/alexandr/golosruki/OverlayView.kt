@@ -138,7 +138,7 @@ class OverlayView(context: Context) : View(context) {
             val marginTop = 18f; val marginLeft = 16f
             val padX = 30f; val padY = 16f; val iconGap = 26f
             // длинные ответы — мельче шрифт, чтобы влезало больше
-            statusText.textSize = if (statusMaxLines > 3) 30f else 38f
+            statusText.textSize = if (statusMaxLines > 3) 34f else 40f
             val maxTextW = width - marginLeft * 2 - padX * 2 - iconGap
             val fm = statusText.fontMetrics
             val lineH = (fm.descent - fm.ascent)

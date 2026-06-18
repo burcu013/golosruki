@@ -973,7 +973,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             cands.mapIndexed { i, c -> "${ordinal(i + 1)} — ${c.name}" }.joinToString(". ") +
             ". Скажите номер."
         speak(spoken)
-        handler.postDelayed({ if (pendingContactChoice != null) { pendingContactChoice = null; Logger.log("CMD", "Выбор контакта истёк") } }, 20000)
+        handler.postDelayed({ if (pendingContactChoice === cands) { pendingContactChoice = null; Logger.log("CMD", "Выбор контакта истёк") } }, 20000)
     }
 
     /** Гибрид: имя контакта не распозналось офлайн — просим назвать и распознаём облаком (Whisper). */
@@ -1077,7 +1077,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                     val card = Secretary.confirmPhrase(p).removeSuffix(" Скажите да или нет.")
                     VoiceAccessibilityService.instance?.showStatusHold("$conflict$card\nСкажите «да» или «нет»", 7, 31000)
                     speak(conflict + Secretary.confirmPhrase(p))
-                    handler.postDelayed({ if (pendingPlan != null) { pendingPlan = null; Logger.log("SEC", "Подтверждение плана истекло") } }, 30000)
+                    handler.postDelayed({ if (pendingPlan === p) { pendingPlan = null; Logger.log("SEC", "Подтверждение плана истекло") } }, 30000)
                 }
             }
         }.start()
@@ -1135,7 +1135,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         val lines = top.mapIndexed { i, t -> "${i + 1}. ${t.title}" }.joinToString("\n")
         VoiceAccessibilityService.instance?.showStatusHold("Какую задачу закрыть?\n$lines\nСкажите номер или «отмена»", top.size + 3, 21000)
         speak("Какую задачу закрыть? " + top.mapIndexed { i, t -> "${ordinal(i + 1)} — ${t.title}" }.joinToString(". ") + ". Скажите номер.")
-        handler.postDelayed({ if (pendingTaskDone != null) { pendingTaskDone = null; Logger.log("SEC", "Выбор задачи истёк") } }, 20000)
+        handler.postDelayed({ if (pendingTaskDone === top) { pendingTaskDone = null; Logger.log("SEC", "Выбор задачи истёк") } }, 20000)
     }
 
     fun startQuery() {
@@ -1256,22 +1256,26 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         // Свободный захват вопроса/текста для ИИ — приоритетно (выше медиа/экрана),
         // чтобы вопрос всегда ловился, даже когда играет видео или активен медиа-режим.
         if (aiListening) {
-            if (text.isBlank()) { resetIdle(); return }
-            val stopExit = text.contains("стоп") || text.contains("отмена") || text.contains("хватит") ||
-                text.contains("закончили") || text.contains("достаточно") ||
-                text.contains("конец разговора") || text.contains("спасибо хватит")
-            // В режиме плана/запроса «Иван» внутри текста (напр. «встреча с Иваном») НЕ выход — только стоп-слова.
-            val exit = stopExit || (!planning && !querying && text.contains(wakeWord))
-            if (exit) {
+            // Убираем эхо слова активации из самой фразы-триггера, чтобы захват не срывался сразу.
+            var t = text
+            if (t.contains(wakeWord)) t = stripWake(t)
+            t = t.trim()
+            if (t.isBlank()) { resetIdle(); return }   // пусто/эхо «иван» — продолжаем слушать вопрос
+            // Выход только по явным стоп-словам (не по слову активации — иначе «иван» в вопросе обрывал захват).
+            val first = t.split(" ").firstOrNull() ?: ""
+            val stopExit = first == "стоп" || first == "отмена" || first == "отменить" || first == "хватит" ||
+                first == "молчи" || t.contains("закончили") || t.contains("достаточно") ||
+                t.contains("конец разговора") || t.contains("спасибо хватит")
+            if (stopExit) {
                 aiListening = false; aiDialog = false; planning = false; querying = false
                 VoiceAccessibilityService.instance?.showStatus(stateText())
                 restartListening(); return
             }
             aiListening = false
             when {
-                planning -> { planning = false; handlePlan(text.trim()) }
-                querying -> { querying = false; handleQuery(text.trim()) }
-                else -> handleAi(aiAsk, text.trim())
+                planning -> { planning = false; handlePlan(t) }
+                querying -> { querying = false; handleQuery(t) }
+                else -> handleAi(aiAsk, t)
             }
             return
         }
@@ -1553,24 +1557,50 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (text.contains("глубокий сон") || text.contains("крепкий сон")) {
             enterDeepSleep(); return
         }
+        // ИИ-помощник: «думай/спроси/сформулируй/поговорим/подробнее» — РАНЬШЕ погоды/календаря/секретаря,
+        // иначе «думай как сегодня» уходило в Календарь («сегодня»).
+        run {
+            val askTriggers = listOf("поразмышляй", "порассуждай", "подумай", "размышляй", "рассуждай", "спросить", "спроси", "думай")
+            val composeTriggers = listOf("сформулируй", "сформулир")
+            val dialogTriggers = listOf("поговорим", "побеседуем", "пообщаемся", "поболтаем")
+            val moreTriggers = listOf("подробнее", "подробней", "развёрнуто", "развернуто", "поподробнее")
+            when {
+                moreTriggers.any { text.contains(it) } && lastAiQuestion.isNotBlank() -> {
+                    handleAi(true, "$lastAiQuestion. Ответь подробно и развёрнуто."); return
+                }
+                dialogTriggers.any { text.contains(it) } -> {
+                    aiDialog = true
+                    speak("Давайте поговорим. Чтобы закончить — скажите «хватит».")
+                    startAiQuery(true); return
+                }
+                composeTriggers.any { text.contains(it) } -> { startAiQuery(false); return }
+                askTriggers.any { text.contains(it) } -> { startAiQuery(true); return }
+                else -> {}
+            }
+        }
+
         // Секретарь: планирование/брифинг/задачи — РАНЬШЕ погоды/календаря («запланируй» содержит «план»)
         run {
             val planTriggers = listOf("запланируй", "запланировать", "назначь", "назначить",
                 "добавь встречу", "добавь событие", "поставь встречу", "запиши план", "планирую", "напомни", "напомнить")
             val taskTriggers = listOf("мои задачи", "список задач", "какие задачи", "что в задачах", "задачи на сегодня")
             val briefTriggers = listOf("брифинг", "сводка", "сводку", "план на день", "доброе утро", "что на сегодня")
-            val doneTriggers = listOf("заверши задачу", "закрой задачу", "закрыть задачу", "задача выполнена",
-                "задачу выполнил", "выполнено", "задача готова", "отметь задачу")
-            val clearTriggers = listOf("очисти задачи", "очисти выполненные", "удали выполненные", "очисти список задач")
+            // Устойчивое распознавание по ОСНОВАМ слов (Vosk даёт варианты: «задачи/задачу», «выполнено/выполнена»).
+            val hasTask = text.contains("задач")
+            val clearTask = (text.contains("очисти") && (text.contains("выполнен") || hasTask)) ||
+                (text.contains("удали") && text.contains("выполнен"))
+            val doneTask = (hasTask && (text.contains("заверши") || text.contains("закро") ||
+                text.contains("закрыть") || text.contains("отметь") || text.contains("выполн"))) ||
+                text.trim() == "выполнено" || text.trim() == "готово"
             when {
                 planTriggers.any { text.contains(it) } -> { startPlanQuery(); return }
                 briefTriggers.any { text.contains(it) } -> { speakBriefing(); return }
-                clearTriggers.any { text.contains(it) } -> {
+                clearTask -> {
                     val n = Secretary.mem(this).clearDone()
                     speak(if (n > 0) "Удалил $n выполненных задач" else "Выполненных задач нет")
                     return
                 }
-                doneTriggers.any { text.contains(it) } -> { startTaskComplete(); return }
+                doneTask -> { startTaskComplete(); return }
                 taskTriggers.any { text.contains(it) } || text.trim() == "задачи" -> { speakTasks(); return }
                 else -> {}
             }
@@ -1632,35 +1662,6 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
         // ИИ-помощник: ловим здесь, чтобы текст ПОСЛЕ триггера не терялся (запрос одной фразой),
         // плюс режим диалога «поговорим … хватит».
-        run {
-            val askTriggers = listOf("поразмышляй", "порассуждай", "подумай", "размышляй", "рассуждай", "спросить", "спроси", "думай")
-            val composeTriggers = listOf("сформулируй", "сформулир")
-            val dialogTriggers = listOf("поговорим", "побеседуем", "пообщаемся", "поболтаем")
-            val moreTriggers = listOf("подробнее", "подробней", "развёрнуто", "развернуто", "поподробнее")
-            when {
-                moreTriggers.any { text.contains(it) } && lastAiQuestion.isNotBlank() -> {
-                    handleAi(true, "$lastAiQuestion. Ответь подробно и развёрнуто.")
-                    return
-                }
-                dialogTriggers.any { text.contains(it) } -> {
-                    aiDialog = true
-                    speak("Давайте поговорим. Чтобы закончить — скажите «хватит».")
-                    startAiQuery(true); return
-                }
-                composeTriggers.any { text.contains(it) } -> {
-                    // Текст для «сформулируй» — свободный (его нет в грамматике команд),
-                    // поэтому всегда переходим в свободный захват: триггер → потом текст.
-                    startAiQuery(false); return
-                }
-                askTriggers.any { text.contains(it) } -> {
-                    // Слова, сказанные в ОДНОЙ фразе после триггера, распознаются маленькой
-                    // командной грамматикой (получается мусор). Поэтому всегда — чистый захват.
-                    startAiQuery(true); return
-                }
-                else -> {}
-            }
-        }
-
         val cmd = CommandParser.parse(text, personal)
         Logger.log("CMD", "Команда: ${cmd.label()}")
 

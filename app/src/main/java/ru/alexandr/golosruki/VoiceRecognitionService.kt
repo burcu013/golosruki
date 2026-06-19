@@ -517,6 +517,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         instance = this
         Logger.init(this)
         Logger.log("SVC", "Служба запущена")
+        if (AudioDiag.ENABLED) handler.postDelayed(audioDiagPoll, 1000L)   // v8.11 диагностика аудио
         // Удаляем «обрезки» недокачанной модели, чтобы не пухли данные.
         runCatching {
             java.io.File(filesDir, "llm").listFiles()?.filter { it.name.endsWith(".part") }?.forEach { it.delete() }
@@ -646,6 +647,13 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private fun scheduleResume(delay: Long) {
         handler.removeCallbacks(resumeAfterSpeak)
         handler.postDelayed(resumeAfterSpeak, delay)
+    }
+    // v8.11 ДИАГНОСТИКА: периодический опрос аудио-состояния (только логи). Самоперепланируется.
+    private val audioDiagPoll: Runnable = object : Runnable {
+        override fun run() {
+            AudioDiag.poll(audioManager)
+            handler.postDelayed(this, 300L)
+        }
     }
 
     /** Активно ли окно, ожидающее выбора/подтверждения голосом (его нельзя гасить по окончании речи). */
@@ -872,6 +880,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                     .firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
                 if (bt != null && !btScoOn) {
                     audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+                    AudioDiag.markScoRequested()   // v8.11 диагностика: отметка t0 для замера задержки
                     val ok = audioManager.setCommunicationDevice(bt)
                     btScoOn = ok
                     Logger.log("MIC", "Гарнитурный микрофон ВКЛ (${bt.productName}, ok=$ok)")
@@ -2285,6 +2294,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     override fun onDestroy() {
         super.onDestroy()
+        handler.removeCallbacks(audioDiagPoll)
         handler.removeCallbacks(idleRunnable)
         unregisterCallListener()
         listeningStop()

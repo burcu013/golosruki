@@ -51,6 +51,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private fun enableBtMic() {
         btMicWanted = true
         Logger.log("MIC", "Включаю BT-микрофон (Android API ${Build.VERSION.SDK_INT})")
+        if (!routingGuardActive) { routingGuardActive = true; handler.postDelayed(routingGuard, 3000) }
         if (Build.VERSION.SDK_INT >= 31 && enableBtMicModern()) return
         enableBtMicLegacy()
     }
@@ -151,11 +152,67 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.postDelayed({ if (btMicWanted && !btScoOn) startScoWithRetry(attempt + 1) }, 2500)
     }
     private fun disableBtMic() {
-        btMicWanted = false; btScoOn = false
+        btMicWanted = false; btScoOn = false; btSuspended = false
+        routingGuardActive = false; handler.removeCallbacks(routingGuard)
         if (Build.VERSION.SDK_INT >= 31) runCatching { audioManager.clearCommunicationDevice() }
         runCatching { audioManager.isBluetoothScoOn = false; audioManager.stopBluetoothSco() }
         runCatching { audioManager.mode = android.media.AudioManager.MODE_NORMAL }
         runCatching { btReceiver?.let { unregisterReceiver(it) } }; btReceiver = null
+    }
+
+    @Volatile private var btSuspended = false   // BT-микрофон временно отпущен (играет звук или идёт звонок)
+    @Volatile private var routingGuardActive = false   // запущен ли таймер-сторож маршрутизации
+
+    /** Отпустить SCO и режим связи, НО сохранить намерение использовать BT (btMicWanted=true),
+     *  чтобы вернуть гарнитуру, когда звук/звонок закончатся. */
+    private fun releaseScoKeepWanted() {
+        btScoOn = false
+        if (Build.VERSION.SDK_INT >= 31) runCatching { audioManager.clearCommunicationDevice() }
+        runCatching { audioManager.isBluetoothScoOn = false; audioManager.stopBluetoothSco() }
+        runCatching { audioManager.mode = android.media.AudioManager.MODE_NORMAL }
+    }
+
+    /**
+     * Сторож аудио-маршрутизации. Главное правило: режим связи и SCO держим ТОЛЬКО когда мы
+     * просто слушаем и ничего не воспроизводится. Как только играет звук (музыка, видео, наш TTS)
+     * или идёт звонок — отпускаем SCO, чтобы звук шёл штатно (A2DP/динамик/CarPlay), а не «как в звонке».
+     * Когда BT-микрофон не нужен вовсе — гарантируем обычный режим (чиним «утечку» MODE_IN_COMMUNICATION).
+     * Возвращает true, если состояние изменилось и нужно пересоздать распознаватель.
+     */
+    private fun ensureAudioRouting(): Boolean {
+        if (!btMicWanted) {
+            // BT не нужен — не оставляем телефон в режиме связи (иначе глохнет медиа и «фантомный звонок»)
+            if (nsService == null && audioModeIs(android.media.AudioManager.MODE_IN_COMMUNICATION)) {
+                runCatching { audioManager.mode = android.media.AudioManager.MODE_NORMAL }
+                Logger.log("MIC", "Сброс лишнего режима связи → обычный")
+            }
+            return false
+        }
+        val mustRelease = isMediaPlaying() || inCall()
+        if (mustRelease && !btSuspended) {
+            btSuspended = true
+            releaseScoKeepWanted()
+            Logger.log("MIC", "BT-микрофон отпущен (играет звук/звонок) — аудио идёт штатно")
+            return true
+        }
+        if (!mustRelease && btSuspended) {
+            btSuspended = false
+            Logger.log("MIC", "Звук/звонок закончились — возвращаю BT-микрофон")
+            enableBtMic()   // вновь поднимет SCO и пересоздаст распознаватель
+            return false    // enableBtMic сам перезапустит слушание
+        }
+        return false
+    }
+
+    private fun audioModeIs(m: Int): Boolean = try { audioManager.mode == m } catch (e: Exception) { false }
+
+    /** Периодическая проверка маршрутизации (каждые 3 c): ловит начало/конец музыки и звонка. */
+    private val routingGuard = object : Runnable {
+        override fun run() {
+            if (!routingGuardActive) return
+            if (ensureAudioRouting()) restartListening()
+            handler.postDelayed(this, 3000)
+        }
     }
 
     /** Играет ли сейчас звук. isMusicActive = true только при реальном воспроизведении. */
@@ -412,7 +469,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         ttsVoiceName = SettingsStore.getTtsVoice(this)
         CommandAliases.aliasMap = SettingsStore.getAliasMap(this)
         useNoiseSuppress = SettingsStore.getNoiseSuppress(this)
-        Logger.log("CFG", "Настройки применены: слово='$wakeWord', сон=${idleMs/1000}с, медиа-игнор=$ignoreMedia, шумоподавление=$useNoiseSuppress")
+        // Синхронизировать BT-микрофон с настройкой: выключение должно срабатывать сразу
+        // (и возвращать обычный режим аудио, иначе глохнет медиа / «фантомный звонок»).
+        val wantBt = SettingsStore.getBtMic(this)
+        if (wantBt && !btMicWanted) enableBtMic()
+        else if (!wantBt && btMicWanted) disableBtMic()
+        Logger.log("CFG", "Настройки применены: слово='$wakeWord', сон=${idleMs/1000}с, медиа-игнор=$ignoreMedia, шумоподавление=$useNoiseSuppress, BT-мик=$wantBt")
         if (model != null && !dictation) restartListening()
         refreshNotification()
         VoiceAccessibilityService.instance?.showStatus("Настройки применены")
@@ -482,7 +544,16 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 }
             }
             tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-                override fun onStart(id: String?) { isSpeaking = true }
+                override fun onStart(id: String?) {
+                    isSpeaking = true
+                    // Чтобы озвучку было слышно через A2DP/динамик, а не «в телефонный канал» —
+                    // на время речи отпускаем SCO/режим связи (сторож вернёт его, когда речь закончится).
+                    if (btMicWanted && !btSuspended) {
+                        btSuspended = true
+                        releaseScoKeepWanted()
+                        Logger.log("MIC", "Озвучка — BT-микрофон временно отпущен (чтобы было слышно)")
+                    }
+                }
                 override fun onDone(id: String?) {
                     isSpeaking = false   // ВАЖНО: и для speakThen-пути, иначе флаг «говорит синтезатор» застревает и блокирует команды
                     val cb = afterSpeak
@@ -2108,7 +2179,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                         callActive = active
                         Logger.log("CALL", if (active) "Звонок — шумоподавление временно ВЫКЛ"
                                            else "Звонок завершён — шумоподавление восстановлено")
-                        if (useNoiseSuppress) restartListening()   // переключить движок
+                        ensureAudioRouting()   // на звонок — отпустить SCO; после — вернуть
+                        restartListening()     // переключить движок (во время звонка — встроенный без NS)
                     }
                 }
             }

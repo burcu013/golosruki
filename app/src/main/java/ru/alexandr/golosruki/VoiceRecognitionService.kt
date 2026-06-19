@@ -630,16 +630,18 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         while (dictBuffer.isNotEmpty() && dictBuffer.last() == ' ') dictBuffer.deleteCharAt(dictBuffer.length - 1)
     }
 
-    private val resumeAfterSpeak: Runnable = Runnable {
-        // v8.7 анти-эхо: если синтезатор ещё реально говорит (длинная сводка/медленная озвучка),
-        // НЕ снимаем гейт — переносим попытку. Иначе свежая речь Ивана из колонок пролезает как команда.
-        if (antiEcho && runCatching { tts?.isSpeaking == true }.getOrDefault(false)) {
-            handler.postDelayed(resumeAfterSpeak, 400L)
-            return@Runnable
+    private val resumeAfterSpeak: Runnable = object : Runnable {
+        override fun run() {
+            // v8.7 анти-эхо: если синтезатор ещё реально говорит (длинная сводка/медленная озвучка),
+            // НЕ снимаем гейт — переносим попытку. Иначе свежая речь Ивана из колонок пролезает как команда.
+            if (antiEcho && runCatching { tts?.isSpeaking == true }.getOrDefault(false)) {
+                handler.postDelayed(this, 400L)
+                return
+            }
+            isSpeaking = false
+            listeningSetPause(false)
+            Logger.log("REC", "Распознавание возобновлено после речи")
         }
-        isSpeaking = false
-        listeningSetPause(false)
-        Logger.log("REC", "Распознавание возобновлено после речи")
     }
     private fun scheduleResume(delay: Long) {
         handler.removeCallbacks(resumeAfterSpeak)

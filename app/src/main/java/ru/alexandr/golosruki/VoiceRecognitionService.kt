@@ -49,11 +49,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var btScoOn = false
     private var btReceiver: android.content.BroadcastReceiver? = null
     private fun enableBtMic() {
-        btMicWanted = true
-        Logger.log("MIC", "Включаю BT-микрофон (Android API ${Build.VERSION.SDK_INT})")
-        if (!routingGuardActive) { routingGuardActive = true; handler.postDelayed(routingGuard, 3000) }
-        if (Build.VERSION.SDK_INT >= 31 && enableBtMicModern()) return
-        enableBtMicLegacy()
+        // Намеренно НИЧЕГО не захватываем: больше не поднимаем Bluetooth SCO и не включаем режим связи.
+        // Запись идёт с обычного микрофона (как у всех приложений) — музыка, магнитола, звонки работают сами.
+        // Гарнитура/авто-микрофон используются системой автоматически, без «телефонного» канала и без переключателей.
+        btMicWanted = false; btScoOn = false; btSuspended = false; routingGuardActive = false
+        runCatching { audioManager.mode = android.media.AudioManager.MODE_NORMAL }
     }
 
     /** Новый API (Android 12+): маршрутизация захвата звука на BT-устройство связи. */
@@ -188,6 +188,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             }
             return false
         }
+        // Во время диктовки НЕ трогаем маршрутизацию: переключение SCO пересоздаёт распознаватель
+        // прямо посреди набора и рвёт текст (слипание/повторы). Держим микрофон стабильным.
+        if (dictation) return false
         val mustRelease = isMediaPlaying() || inCall()
         if (mustRelease && !btSuspended) {
             btSuspended = true
@@ -330,6 +333,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var tts: android.speech.tts.TextToSpeech? = null
     @Volatile private var ttsReady = false
     @Volatile private var isSpeaking = false
+    private val speechTailGraceMs = 900L   // после окончания речи ещё глушим вход: хвост звука/эхо в динамике
     @Volatile private var afterSpeak: (() -> Unit)? = null   // одноразовое действие после окончания речи
     private var ttsEnabled = true
     private var ttsPitch = 1.0f
@@ -348,6 +352,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private val idleRunnable = Runnable {
         if (aiListening) { aiListening = false; restartListening() }   // заброшенный ИИ-запрос — сброс
         state = State.ASLEEP
+        refreshMicForState()   // ушли в сон — отпустить микрофон гарнитуры (если был взят)
         if (!answerHeld) {   // во время долгого ответа не подменяем текст на «сон»
             VoiceAccessibilityService.instance?.showStatus(stateText())
             VoiceAccessibilityService.instance?.keepScreenOn(false)
@@ -544,21 +549,18 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 }
             }
             tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-                override fun onStart(id: String?) {
-                    isSpeaking = true
-                    // Чтобы озвучку было слышно через A2DP/динамик, а не «в телефонный канал» —
-                    // на время речи отпускаем SCO/режим связи (сторож вернёт его, когда речь закончится).
-                    if (btMicWanted && !btSuspended) {
-                        btSuspended = true
-                        releaseScoKeepWanted()
-                        Logger.log("MIC", "Озвучка — BT-микрофон временно отпущен (чтобы было слышно)")
-                    }
-                }
+                override fun onStart(id: String?) { isSpeaking = true; handler.removeCallbacks(resumeAfterSpeak) }
                 override fun onDone(id: String?) {
-                    isSpeaking = false   // ВАЖНО: и для speakThen-пути, иначе флаг «говорит синтезатор» застревает и блокирует команды
+                    // НЕ сбрасываем isSpeaking мгновенно: даём «хвосту» речи/эху в динамике утихнуть,
+                    // иначе распознаватель ловит собственные слова на стыке (самотриггер «сводка горит» и т.п.).
                     val cb = afterSpeak
-                    if (cb != null) { afterSpeak = null; handler.post { cb() } }
-                    else { scheduleResume(500); post { if (!hasPendingHold()) VoiceAccessibilityService.instance?.releaseStatusHold() } }
+                    if (cb != null) {
+                        afterSpeak = null
+                        handler.postDelayed({ isSpeaking = false; cb() }, speechTailGraceMs)
+                    } else {
+                        scheduleResume(speechTailGraceMs)
+                        post { if (!hasPendingHold()) VoiceAccessibilityService.instance?.releaseStatusHold() }
+                    }
                 }
                 @Deprecated("deprecated") override fun onError(id: String?) { scheduleResume(500) }
             })
@@ -658,7 +660,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             tts?.speak(cleanForSpeech(text), android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki")
         }
         // страховка, если движок не сообщит об окончании
-        scheduleResume(1800L + text.length * 90L)
+        scheduleResume(1800L + text.length * 90L + speechTailGraceMs)
     }
 
     /** Убирает markdown, чтобы синтезатор не читал «звёздочка/решётка»; заголовки/жирный → пауза. */
@@ -716,7 +718,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.removeCallbacks(resumeAfterSpeak)   // НЕ возобновлять Vosk автоматически — действие решит само
         runCatching { tts?.speak(cleanForSpeech(text), android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki_then") }
         // страховка, если onDone не придёт
-        handler.postDelayed({ val cb = afterSpeak; if (cb != null) { afterSpeak = null; isSpeaking = false; cb() } }, 1800L + text.length * 90L)
+        handler.postDelayed({ val cb = afterSpeak; if (cb != null) { afterSpeak = null; isSpeaking = false; cb() } }, 1800L + text.length * 90L + speechTailGraceMs)
     }
 
     private fun vibrateTick() {
@@ -832,6 +834,45 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         else runCatching { speechService?.setPause(p) }
     }
 
+    /** Есть ли РЕАЛЬНО подключённый микрофон гарнитуры/HFP (а не просто A2DP-музыка). Без ретраев. */
+    private fun btScoMicAvailable(): Boolean = try {
+        Build.VERSION.SDK_INT >= 31 &&
+            audioManager.availableCommunicationDevices.any { it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+    } catch (e: Exception) { false }
+
+    /** Когда осмысленно взять микрофон гарнитуры: пользователь общается с Иваном, музыка/звонок НЕ идут,
+     *  и реально есть HFP-микрофон. В авто при играющей музыке → false (музыка не рвётся). Без переключателей. */
+    private fun wantHeadsetMic(): Boolean =
+        (state == State.AWAKE || dictation || aiListening) &&
+        !callActive && !inCall() && !isMediaPlaying() && btScoMicAvailable()
+
+    /** Берём/отпускаем микрофон гарнитуры через канал связи. Вызывается ТОЛЬКО при реальном наличии HFP. */
+    private fun applyMicRouting(headset: Boolean) {
+        if (Build.VERSION.SDK_INT < 31) return
+        runCatching {
+            if (headset) {
+                val bt = audioManager.availableCommunicationDevices
+                    .firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+                if (bt != null && !btScoOn) {
+                    audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+                    val ok = audioManager.setCommunicationDevice(bt)
+                    btScoOn = ok
+                    Logger.log("MIC", "Гарнитурный микрофон ВКЛ (${bt.productName}, ok=$ok)")
+                }
+            } else if (btScoOn || audioModeIs(android.media.AudioManager.MODE_IN_COMMUNICATION)) {
+                audioManager.clearCommunicationDevice()
+                audioManager.mode = android.media.AudioManager.MODE_NORMAL
+                btScoOn = false
+                Logger.log("MIC", "Микрофон гарнитуры отпущен → встроенный")
+            }
+        }
+    }
+
+    /** Переключить движок под текущую цель (гарнитура↔встроенный) только если решение изменилось. */
+    private fun refreshMicForState() {
+        if (wantHeadsetMic() != btScoOn) restartListening()
+    }
+
     private fun restartListening() {
         listeningStop()
         handler.postDelayed({
@@ -842,9 +883,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 Recognizer(m, 16000.0f, Vocabulary.buildGrammar(personal, wakeWord, mediaCode))
             }
             recognizer = rec
-            // BT-гарнитура захватывается только источником VOICE_COMMUNICATION (его использует NsSpeechService).
-            // Поэтому при включённом BT-микрофоне берём этот движок даже если шумоподавление выключено.
-            val useComm = (useNoiseSuppress || btMicWanted) && !callActive
+            // Автоматическая гарнитура: если пользователь общается с Иваном и музыка/звонок не идут —
+            // берём микрофон гарнитуры; иначе пишем со встроенного (музыка/CarPlay/звонки не рвутся).
+            val headset = wantHeadsetMic()
+            applyMicRouting(headset)
+            // SCO-микрофон гарнитуры захватывается источником VOICE_COMMUNICATION → тогда нужен NS-движок.
+            val useComm = (useNoiseSuppress || headset) && !callActive
             if (useComm) {
                 val s = NsSpeechService(rec, 16000, this, this)
                 if (s.start()) {
@@ -1724,10 +1768,16 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         Logger.log("REC", "Распознано: '$text' (state=$state, paused=$paused, dict=$dictation)")
 
         if (dictation) {
-            // Гарантированный выход: слово активации, «стоп», «отмена», «готово», «конец»
-            if (text.contains(wakeWord) || text.contains("стоп") || text.contains("отмена") ||
-                text.contains("готово") || text.contains("конец")) {
+            val t = text.trim()
+            // Выход ТОЛЬКО по слову «готово» (и его частом мисхире «готова») — отдельным словом.
+            // Никаких стоп/отмена/конец, чтобы лишнее слово в потоке речи не прерывало набор.
+            // Слово активации в начале фразы — осознанная команда, тоже выходит.
+            if (t == "готово" || t == "готова" || t.startsWith(wakeWord)) {
                 exitDictation(); return
+            }
+            // Одиночное командное слово входа в диктовку НЕ печатаем (эхо триггера, причина «напиши» в поле).
+            if (t in setOf("напиши", "напишите", "диктовка", "печатать", "печатай", "введи", "пиши")) {
+                resetIdle(); return
             }
             // Переключение режима БЕЗ выхода и БЕЗ стирания набранного:
             //  «цифры/цифрами» → ввод цифр; «буквы/текст/словами» → снова текст.
@@ -1757,12 +1807,17 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         }
 
         val isWake = text.contains(wakeWord)
-        val isResume = text.contains("слушай") || text.contains("продолжи")
+        // «слушай/продолжи» — это ВОЗОБНОВЛЕНИЕ после явной паузы, а НЕ общее пробуждение.
+        // Иначе бытовое «слушай…» от людей рядом (и собственное «я снова слушаю») будило ассистента.
+        // Будит только слово активации «$wakeWord».
+        val isResume = paused && (text == "слушай" || text == "продолжи" || text == "продолжай" ||
+            text.startsWith("слушай") || text.startsWith("продолж"))
 
         if (isWake || isResume) {
             state = State.AWAKE
             if (paused) { setPaused(false); Logger.log("REC", "Пауза снята") }
             resetIdle()
+            refreshMicForState()   // проснулись — взять микрофон гарнитуры, если уместно (без музыки/звонка)
             if (keepScreen) VoiceAccessibilityService.instance?.keepScreenOn(true)
             val rest = if (isWake) stripWake(text) else stripResume(text)
             if (vibrateOnWake && rest.isBlank()) vibrateTick()
@@ -2179,8 +2234,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                         callActive = active
                         Logger.log("CALL", if (active) "Звонок — шумоподавление временно ВЫКЛ"
                                            else "Звонок завершён — шумоподавление восстановлено")
-                        ensureAudioRouting()   // на звонок — отпустить SCO; после — вернуть
-                        restartListening()     // переключить движок (во время звонка — встроенный без NS)
+                        restartListening()     // во время звонка — встроенный мик без NS; после — обратно
                     }
                 }
             }

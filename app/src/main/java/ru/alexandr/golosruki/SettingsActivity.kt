@@ -20,7 +20,6 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var mediaCodeField: EditText
     private lateinit var ttsCheck: android.widget.Switch
     private lateinit var confirmCheck: android.widget.Switch
-    private lateinit var btMicCheck: android.widget.Switch
     private lateinit var noiseCheck: android.widget.Switch
     private lateinit var aiEnableCheck: android.widget.Switch
     private lateinit var aiNameField: EditText
@@ -183,12 +182,7 @@ class SettingsActivity : ComponentActivity() {
             isChecked = SettingsStore.getConfirmCalls(this@SettingsActivity)
         }
         a.addView(confirmCheck)
-        btMicCheck = UiKit.switchView(this).apply {
-            text = "Bluetooth-микрофон (гарнитура)"; textSize = 15f
-            isChecked = SettingsStore.getBtMic(this@SettingsActivity)
-        }
-        a.addView(btMicCheck)
-        a.addView(UiKit.hint(this, "🎧 Если гарнитура недоступна или села — Иван автоматически вернётся на встроенный микрофон. Поддержка зависит от модели телефона/гарнитуры."))
+        a.addView(UiKit.hint(this, "🎧 Гарнитура и микрофон в авто работают автоматически — отдельно включать ничего не нужно. Иван слушает так, чтобы музыка, магнитола и звонки работали как обычно."))
         noiseCheck = UiKit.switchView(this).apply {
             text = "Шумоподавление (эксперимент)"; textSize = 15f
             isChecked = SettingsStore.getNoiseSuppress(this@SettingsActivity)
@@ -680,7 +674,6 @@ class SettingsActivity : ComponentActivity() {
         SettingsStore.setMediaWindowSec(this, mediaWindow.text.toString().toIntOrNull() ?: 4)
         SettingsStore.setTts(this, ttsCheck.isChecked)
         SettingsStore.setConfirmCalls(this, confirmCheck.isChecked)
-        SettingsStore.setBtMic(this, btMicCheck.isChecked)
         SettingsStore.setNoiseSuppress(this, noiseCheck.isChecked)
         SettingsStore.setDeepSleepEnabled(this, deepSleepCheck.isChecked)
         SettingsStore.setDeepSleepPhrase(this, deepPhrase.text.toString().lowercase().trim().ifBlank { "иван полный подъём" })

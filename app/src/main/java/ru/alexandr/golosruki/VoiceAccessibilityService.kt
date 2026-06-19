@@ -838,7 +838,8 @@ class VoiceAccessibilityService : AccessibilityService() {
     fun beginDictationField() {
         dictCommittedLen = 0
         val node = focusedEditable() ?: return
-        val cur = node.text?.toString() ?: ""
+        val showingHint = Build.VERSION.SDK_INT >= 26 && node.isShowingHintText
+        val cur = if (showingHint) "" else (node.text?.toString() ?: "")
         runCatching {
             val sel = Bundle().apply {
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cur.length)
@@ -865,9 +866,12 @@ class VoiceAccessibilityService : AccessibilityService() {
 
     /** Вставка строки в текущую позицию курсора с сохранением остального текста. */
     private fun insertAtCursor(node: AccessibilityNodeInfo, ins: String) {
-        val cur = node.text?.toString() ?: ""
-        val se = node.textSelectionEnd
-        val ss = node.textSelectionStart
+        // Если поле показывает только подсказку (hint), его «текст» — это не содержимое.
+        // Иначе новый текст прилипает к подсказке без пробела («Поиск чатовнапиши»).
+        val showingHint = Build.VERSION.SDK_INT >= 26 && node.isShowingHintText
+        val cur = if (showingHint) "" else (node.text?.toString() ?: "")
+        val se = if (showingHint) 0 else node.textSelectionEnd
+        val ss = if (showingHint) 0 else node.textSelectionStart
         val end = if (se in 0..cur.length) se else cur.length
         val start = if (ss in 0..cur.length) ss else end
         val a = minOf(start, end).coerceIn(0, cur.length)

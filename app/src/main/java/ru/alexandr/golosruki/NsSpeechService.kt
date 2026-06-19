@@ -63,19 +63,8 @@ class NsSpeechService(
         if (rec.state != AudioRecord.STATE_INITIALIZED) { runCatching { rec.release() }; return false }
         record = rec
 
-        // Если есть BT-микрофон (гарнитура/авто) — ПРИНУДИТЕЛЬНО направляем запись на него.
-        // Без этого система часто оставляет встроенный микрофон даже при VOICE_COMMUNICATION.
-        runCatching {
-            val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            val btIn = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
-                .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
-            if (btIn != null) {
-                val set = rec.setPreferredDevice(btIn)
-                Logger.log("MIC", "Предпочитаю BT-микрофон записи: ${btIn.productName} (set=$set)")
-            } else {
-                Logger.log("MIC", "BT-микрофон записи не найден среди входов — запись со встроенного")
-            }
-        }
+        // Запись с обычного (системного) микрофона. SCO/«телефонный» канал не используем,
+        // поэтому музыка и звонки работают штатно. Если система сама направляет вход на гарнитуру — ок.
 
         val sid = rec.audioSessionId
         var fx = ""

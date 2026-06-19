@@ -291,6 +291,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var planning = false    // свободный захват — это план для секретаря (не вопрос)
     @Volatile private var querying = false     // свободный захват — это вопрос к памяти секретаря
     private val dictBuffer = StringBuilder()
+    private var lastDictApplied = ""           // v8.8 анти-дубль диктовки: последний применённый финал
     @Volatile private var mediaControlMode = false
     private var mediaCode = "медиа"
     @Volatile private var screenOffMedia = false
@@ -629,7 +630,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         while (dictBuffer.isNotEmpty() && dictBuffer.last() == ' ') dictBuffer.deleteCharAt(dictBuffer.length - 1)
     }
 
-    private val resumeAfterSpeak = Runnable {
+    private val resumeAfterSpeak: Runnable = Runnable {
         // v8.7 анти-эхо: если синтезатор ещё реально говорит (длинная сводка/медленная озвучка),
         // НЕ снимаем гейт — переносим попытку. Иначе свежая речь Ивана из колонок пролезает как команда.
         if (antiEcho && runCatching { tts?.isSpeaking == true }.getOrDefault(false)) {
@@ -962,6 +963,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             // Чистая модель: НЕ стираем поле и НЕ переносим текст в буфер.
             // Буфер пустой, дописываем только НОВОЕ в позицию курсора.
             dictBuffer.setLength(0)
+            lastDictApplied = ""
             val kb = GolosRukiKeyboardService.instance
             if (kb != null && kb.isActiveInput()) kb.beginDictation()
             else VoiceAccessibilityService.instance?.beginDictationField()
@@ -1805,14 +1807,26 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 resetIdle(); return
             }
             resetIdle()
+            // v8.8 анти-дубль диктовки: Vosk нередко повторяет или наращивает финал одной фразы,
+            // отчего текст множился («…из автомобиля …из автомобиля»). Применяем только новую часть.
+            var toApply = text.trim()
+            when {
+                toApply.isBlank() -> return
+                toApply == lastDictApplied -> return                                          // точный повтор
+                lastDictApplied.isNotBlank() && lastDictApplied.startsWith(toApply) -> return  // усечённый повтор
+                lastDictApplied.isNotBlank() && toApply.startsWith(lastDictApplied) ->         // нарастающий финал → только дельта
+                    toApply = toApply.removePrefix(lastDictApplied).trim()
+            }
+            lastDictApplied = text.trim()
+            if (toApply.isBlank()) return
             if (dictationDigits) {
-                val chunk = NumberWords.toDigits(text)
+                val chunk = NumberWords.toDigits(toApply)
                 if (chunk.isNotBlank()) {
                     if (dictBuffer.isNotEmpty() && dictBuffer.last() != ' ' && dictBuffer.last() != '\n') dictBuffer.append(" ")
                     dictBuffer.append(chunk); flushDictation()
                 }
             } else {
-                applyDictation(text)
+                applyDictation(toApply)
             }
             return
         }

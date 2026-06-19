@@ -27,12 +27,19 @@ object CommandParser {
         // 0. Разблокировка («привет» после «Иван»)
         if (t.contains("привет")) return Command.Unlock
 
-        // 0.1 SOS — с защитой от случайного вызова (если задан пин-слово/число)
-        if (t.contains("сос") || t.contains("спасите") || t.contains("тревога") || t.contains("помогите")) {
-            if (personal.sosPin.isBlank()) return Command.Sos          // защита не задана
-            if (t.contains(personal.sosPin)) return Command.Sos        // пин совпал
-            // пин задан, но не произнесён — НЕ вызываем SOS
-            return Command.Unknown
+        // 0.1 SOS — защита от случайного вызова. v8.8: «сос» как короткий слог лезет в эхо и в обычную
+        // речь, поэтому без пина требуем ОСОЗНАННУЮ фразу: сигнал + «вызов»/«помощь» либо повтор «сос сос».
+        run {
+            val sosWords = t.split(Regex("[^а-яё]+")).filter { it.isNotBlank() }
+            val hasSignal = sosWords.any { it == "сос" || it == "спасите" || it == "тревога" || it == "помогите" }
+            if (hasSignal) {
+                if (personal.sosPin.isNotBlank()) {
+                    return if (t.contains(personal.sosPin)) Command.Sos else Command.Unknown
+                }
+                val confirmed = t.contains("вызов") || t.contains("помощ") ||
+                    sosWords.count { it == "сос" } >= 2
+                return if (confirmed) Command.Sos else Command.Unknown
+            }
         }
 
         // 0.15 Управление звонком и звуком

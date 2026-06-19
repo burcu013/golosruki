@@ -333,7 +333,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var tts: android.speech.tts.TextToSpeech? = null
     @Volatile private var ttsReady = false
     @Volatile private var isSpeaking = false
-    private val speechTailGraceMs = 900L   // после окончания речи ещё глушим вход: хвост звука/эхо в динамике
+    /** v8.7 АНТИ-ЭХО (kill-switch). Чинит самотриггер: гейт «идёт озвучка» снимался раньше, чем Иван
+     *  реально договорил (страховочный таймер срабатывал на длинной сводке), и хвост его же речи из
+     *  колонок исполнялся как команда — отсюда фантомные «Погода»/«Календарь»/«SOS» в машине.
+     *  Если новая логика начнёт мешать — поставь false и пересобери: вернётся прежнее поведение 1:1. */
+    private val antiEcho = true
+    private val speechTailGraceMs = if (antiEcho) 1300L else 900L   // после окончания речи ещё глушим вход: хвост звука/эхо в динамике
     @Volatile private var afterSpeak: (() -> Unit)? = null   // одноразовое действие после окончания речи
     private var ttsEnabled = true
     private var ttsPitch = 1.0f
@@ -625,6 +630,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     private val resumeAfterSpeak = Runnable {
+        // v8.7 анти-эхо: если синтезатор ещё реально говорит (длинная сводка/медленная озвучка),
+        // НЕ снимаем гейт — переносим попытку. Иначе свежая речь Ивана из колонок пролезает как команда.
+        if (antiEcho && runCatching { tts?.isSpeaking == true }.getOrDefault(false)) {
+            handler.postDelayed(resumeAfterSpeak, 400L)
+            return@Runnable
+        }
         isSpeaking = false
         listeningSetPause(false)
         Logger.log("REC", "Распознавание возобновлено после речи")

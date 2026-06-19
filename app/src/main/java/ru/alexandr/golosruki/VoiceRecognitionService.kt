@@ -853,8 +853,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     } catch (e: Exception) { false }
 
     /** Когда осмысленно взять микрофон гарнитуры: пользователь общается с Иваном, музыка/звонок НЕ идут,
-     *  и реально есть HFP-микрофон. В авто при играющей музыке → false (музыка не рвётся). Без переключателей. */
+     *  и реально есть HFP-микрофон. В авто при играющей музыке → false (музыка не рвётся). Без переключателей.
+     *  v8.9: уважаем настройку «BT-микрофон». Когда она ВЫКЛ (по умолчанию) — НЕ входим в режим связи вообще,
+     *  иначе магнитола читает вход/выход MODE_IN_COMMUNICATION как конец звонка и САМА возобновляет музыку. */
     private fun wantHeadsetMic(): Boolean =
+        SettingsStore.getBtMic(this) &&
         (state == State.AWAKE || dictation || aiListening) &&
         !callActive && !inCall() && !isMediaPlaying() && btScoMicAvailable()
 

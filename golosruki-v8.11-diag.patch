@@ -1,0 +1,293 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 41e8a81..2798bb6 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -11,8 +11,8 @@ android {
+         applicationId = "ru.alexandr.golosruki"
+         minSdk = 26
+         targetSdk = 34
+-        versionCode = 147
+-        versionName = "8.6"
++        versionCode = 152
++        versionName = "8.11"
+     }
+ 
+     signingConfigs {
+diff --git a/app/src/main/java/ru/alexandr/golosruki/AudioDiag.kt b/app/src/main/java/ru/alexandr/golosruki/AudioDiag.kt
+new file mode 100644
+index 0000000..48e8c89
+--- /dev/null
++++ b/app/src/main/java/ru/alexandr/golosruki/AudioDiag.kt
+@@ -0,0 +1,81 @@
++package ru.alexandr.golosruki
++
++import android.media.AudioManager
++import android.media.AudioDeviceInfo
++import android.os.Build
++import android.os.SystemClock
++
++/**
++ * v8.11 — ДИАГНОСТИКА аудио-маршрутизации. ТОЛЬКО логи, поведение приложения не меняется.
++ *
++ * Замеряет на реальных устройствах:
++ *  • задержку реального подключения BT-микрофона (от запроса до активного устройства связи);
++ *  • поведение музыки (A2DP) в момент захвата микрофона — глушится / встаёт / резюмируется;
++ *  • имя и тип подключённого устройства (наушники vs автомагнитола).
++ *
++ * По этим данным делается нормальная реализация внешнего микрофона БЕЗ догадок.
++ * Выключается одним флагом ENABLED (тогда ни одной строки в лог не пишет).
++ */
++object AudioDiag {
++    @Volatile var ENABLED = true
++
++    private var lastState = ""
++    private var lastChangeAt = 0L
++    private var scoRequestedAt = 0L
++    private var lastHeartbeatAt = 0L
++
++    /** Отметить момент запроса BT-микрофона — для замера задержки до реального подключения. */
++    fun markScoRequested() {
++        if (!ENABLED) return
++        scoRequestedAt = SystemClock.elapsedRealtime()
++        Logger.log("DIAG", "запрошен BT-микрофон (t0)")
++    }
++
++    /** Периодический опрос. Пишем в лог только при ИЗМЕНЕНИИ состояния + редкий «пульс». */
++    fun poll(am: AudioManager) {
++        if (!ENABLED) return
++        val now = SystemClock.elapsedRealtime()
++        val mode = when (am.mode) {
++            AudioManager.MODE_NORMAL -> "NORMAL"
++            AudioManager.MODE_IN_CALL -> "IN_CALL"
++            AudioManager.MODE_IN_COMMUNICATION -> "IN_COMM"
++            else -> "mode${am.mode}"
++        }
++        val music = am.isMusicActive
++        val scoOn = runCatching { am.isBluetoothScoOn }.getOrDefault(false)
++        var comm = "нет"
++        var avail = "n/a"
++        if (Build.VERSION.SDK_INT >= 31) {
++            comm = runCatching {
++                am.communicationDevice?.let { devLabel(it.type, it.productName?.toString()) } ?: "нет"
++            }.getOrDefault("?")
++            avail = runCatching {
++                am.availableCommunicationDevices.joinToString { devLabel(it.type, it.productName?.toString()) }
++            }.getOrDefault("?")
++        }
++        val st = "mode=$mode music=$music scoOn=$scoOn comm=$comm"
++        if (st != lastState) {
++            val dt = if (lastChangeAt > 0) now - lastChangeAt else 0
++            val sinceReq = if (scoRequestedAt > 0) " | от запроса=${now - scoRequestedAt}мс" else ""
++            Logger.log("DIAG", "$st | устройства=[$avail]$sinceReq (изм. через ${dt}мс)")
++            lastState = st
++            lastChangeAt = now
++            lastHeartbeatAt = now
++        } else if (now - lastHeartbeatAt >= 10000L) {
++            Logger.log("DIAG", "пульс: $st")
++            lastHeartbeatAt = now
++        }
++    }
++
++    private fun devLabel(type: Int, name: String?): String {
++        val t = when (type) {
++            AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "BT_SCO"
++            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "BT_A2DP"
++            AudioDeviceInfo.TYPE_BUILTIN_MIC -> "ВСТР_МИК"
++            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "ДИНАМИК"
++            AudioDeviceInfo.TYPE_WIRED_HEADSET -> "ПРОВОД_ГАРН"
++            else -> "тип$type"
++        }
++        return if (name.isNullOrBlank()) t else "$t:$name"
++    }
++}
+diff --git a/app/src/main/java/ru/alexandr/golosruki/CommandParser.kt b/app/src/main/java/ru/alexandr/golosruki/CommandParser.kt
+index 115ebf3..0bd25ab 100644
+--- a/app/src/main/java/ru/alexandr/golosruki/CommandParser.kt
++++ b/app/src/main/java/ru/alexandr/golosruki/CommandParser.kt
+@@ -27,12 +27,19 @@ object CommandParser {
+         // 0. Разблокировка («привет» после «Иван»)
+         if (t.contains("привет")) return Command.Unlock
+ 
+-        // 0.1 SOS — с защитой от случайного вызова (если задан пин-слово/число)
+-        if (t.contains("сос") || t.contains("спасите") || t.contains("тревога") || t.contains("помогите")) {
+-            if (personal.sosPin.isBlank()) return Command.Sos          // защита не задана
+-            if (t.contains(personal.sosPin)) return Command.Sos        // пин совпал
+-            // пин задан, но не произнесён — НЕ вызываем SOS
+-            return Command.Unknown
++        // 0.1 SOS — защита от случайного вызова. v8.8: «сос» как короткий слог лезет в эхо и в обычную
++        // речь, поэтому без пина требуем ОСОЗНАННУЮ фразу: сигнал + «вызов»/«помощь» либо повтор «сос сос».
++        run {
++            val sosWords = t.split(Regex("[^а-яё]+")).filter { it.isNotBlank() }
++            val hasSignal = sosWords.any { it == "сос" || it == "спасите" || it == "тревога" || it == "помогите" }
++            if (hasSignal) {
++                if (personal.sosPin.isNotBlank()) {
++                    return if (t.contains(personal.sosPin)) Command.Sos else Command.Unknown
++                }
++                val confirmed = t.contains("вызов") || t.contains("помощ") ||
++                    sosWords.count { it == "сос" } >= 2
++                return if (confirmed) Command.Sos else Command.Unknown
++            }
+         }
+ 
+         // 0.15 Управление звонком и звуком
+diff --git a/app/src/main/java/ru/alexandr/golosruki/GuideActivity.kt b/app/src/main/java/ru/alexandr/golosruki/GuideActivity.kt
+index 1bcc804..0dd561c 100644
+--- a/app/src/main/java/ru/alexandr/golosruki/GuideActivity.kt
++++ b/app/src/main/java/ru/alexandr/golosruki/GuideActivity.kt
+@@ -227,7 +227,7 @@ class GuideActivity : ComponentActivity() {
+ 
+         section("ℹ️ Разработчик", listOf(
+             "Донбасс Реклама — donbassreklama.ru",
+-            "Версия 8.6"
++            "Версия 8.11"
+         ), col)
+ 
+         setContentView(ScrollView(this).apply { addView(col) })
+diff --git a/app/src/main/java/ru/alexandr/golosruki/MainActivity.kt b/app/src/main/java/ru/alexandr/golosruki/MainActivity.kt
+index f7c803f..8015d3e 100644
+--- a/app/src/main/java/ru/alexandr/golosruki/MainActivity.kt
++++ b/app/src/main/java/ru/alexandr/golosruki/MainActivity.kt
+@@ -195,7 +195,7 @@ class MainActivity : ComponentActivity() {
+         card.addView(UiKit.sectionHeader(this, "О приложении"))
+         card.addView(UiKit.body(this, "ГолосРуки — голосовое управление смартфоном для людей с ограниченными возможностями."))
+         card.addView(UiKit.body(this, "Офлайн-распознавание речи, без интернета и без передачи данных."))
+-        card.addView(UiKit.body(this, "Версия 8.6 • Разработчик: Донбасс Реклама"))
++        card.addView(UiKit.body(this, "Версия 8.11 • Разработчик: Донбасс Реклама"))
+         return card
+     }
+ 
+diff --git a/app/src/main/java/ru/alexandr/golosruki/VoiceRecognitionService.kt b/app/src/main/java/ru/alexandr/golosruki/VoiceRecognitionService.kt
+index aaac041..5d15abb 100644
+--- a/app/src/main/java/ru/alexandr/golosruki/VoiceRecognitionService.kt
++++ b/app/src/main/java/ru/alexandr/golosruki/VoiceRecognitionService.kt
+@@ -291,6 +291,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
+     @Volatile private var planning = false    // свободный захват — это план для секретаря (не вопрос)
+     @Volatile private var querying = false     // свободный захват — это вопрос к памяти секретаря
+     private val dictBuffer = StringBuilder()
++    private var lastDictApplied = ""           // v8.8 анти-дубль диктовки: последний применённый финал
+     @Volatile private var mediaControlMode = false
+     private var mediaCode = "медиа"
+     @Volatile private var screenOffMedia = false
+@@ -333,7 +334,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
+     private var tts: android.speech.tts.TextToSpeech? = null
+     @Volatile private var ttsReady = false
+     @Volatile private var isSpeaking = false
+-    private val speechTailGraceMs = 900L   // после окончания речи ещё глушим вход: хвост звука/эхо в динамике
++    /** v8.7 АНТИ-ЭХО (kill-switch). Чинит самотриггер: гейт «идёт озвучка» снимался раньше, чем Иван
++     *  реально договорил (страховочный таймер срабатывал на длинной сводке), и хвост его же речи из
++     *  колонок исполнялся как команда — отсюда фантомные «Погода»/«Календарь»/«SOS» в машине.
++     *  Если новая логика начнёт мешать — поставь false и пересобери: вернётся прежнее поведение 1:1. */
++    private val antiEcho = true
++    private val speechTailGraceMs = if (antiEcho) 1300L else 900L   // после окончания речи ещё глушим вход: хвост звука/эхо в динамике
+     @Volatile private var afterSpeak: (() -> Unit)? = null   // одноразовое действие после окончания речи
+     private var ttsEnabled = true
+     private var ttsPitch = 1.0f
+@@ -511,6 +517,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
+         instance = this
+         Logger.init(this)
+         Logger.log("SVC", "Служба запущена")
++        if (AudioDiag.ENABLED) handler.postDelayed(audioDiagPoll, 1000L)   // v8.11 диагностика аудио
+         // Удаляем «обрезки» недокачанной модели, чтобы не пухли данные.
+         runCatching {
+             java.io.File(filesDir, "llm").listFiles()?.filter { it.name.endsWith(".part") }?.forEach { it.delete() }
+@@ -624,15 +631,30 @@ class VoiceRecognitionService : Service(), RecognitionListener {
+         while (dictBuffer.isNotEmpty() && dictBuffer.last() == ' ') dictBuffer.deleteCharAt(dictBuffer.length - 1)
+     }
+ 
+-    private val resumeAfterSpeak = Runnable {
+-        isSpeaking = false
+-        listeningSetPause(false)
+-        Logger.log("REC", "Распознавание возобновлено после речи")
++    private val resumeAfterSpeak: Runnable = object : Runnable {
++        override fun run() {
++            // v8.7 анти-эхо: если синтезатор ещё реально говорит (длинная сводка/медленная озвучка),
++            // НЕ снимаем гейт — переносим попытку. Иначе свежая речь Ивана из колонок пролезает как команда.
++            if (antiEcho && runCatching { tts?.isSpeaking == true }.getOrDefault(false)) {
++                handler.postDelayed(this, 400L)
++                return
++            }
++            isSpeaking = false
++            listeningSetPause(false)
++            Logger.log("REC", "Распознавание возобновлено после речи")
++        }
+     }
+     private fun scheduleResume(delay: Long) {
+         handler.removeCallbacks(resumeAfterSpeak)
+         handler.postDelayed(resumeAfterSpeak, delay)
+     }
++    // v8.11 ДИАГНОСТИКА: периодический опрос аудио-состояния (только логи). Самоперепланируется.
++    private val audioDiagPoll: Runnable = object : Runnable {
++        override fun run() {
++            AudioDiag.poll(audioManager)
++            handler.postDelayed(this, 300L)
++        }
++    }
+ 
+     /** Активно ли окно, ожидающее выбора/подтверждения голосом (его нельзя гасить по окончании речи). */
+     private fun hasPendingHold(): Boolean =
+@@ -841,8 +863,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
+     } catch (e: Exception) { false }
+ 
+     /** Когда осмысленно взять микрофон гарнитуры: пользователь общается с Иваном, музыка/звонок НЕ идут,
+-     *  и реально есть HFP-микрофон. В авто при играющей музыке → false (музыка не рвётся). Без переключателей. */
++     *  и реально есть HFP-микрофон. В авто при играющей музыке → false (музыка не рвётся). Без переключателей.
++     *  v8.9: уважаем настройку «BT-микрофон». Когда она ВЫКЛ (по умолчанию) — НЕ входим в режим связи вообще,
++     *  иначе магнитола читает вход/выход MODE_IN_COMMUNICATION как конец звонка и САМА возобновляет музыку. */
+     private fun wantHeadsetMic(): Boolean =
++        SettingsStore.getBtMic(this) &&
+         (state == State.AWAKE || dictation || aiListening) &&
+         !callActive && !inCall() && !isMediaPlaying() && btScoMicAvailable()
+ 
+@@ -855,6 +880,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
+                     .firstOrNull { it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+                 if (bt != null && !btScoOn) {
+                     audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
++                    AudioDiag.markScoRequested()   // v8.11 диагностика: отметка t0 для замера задержки
+                     val ok = audioManager.setCommunicationDevice(bt)
+                     btScoOn = ok
+                     Logger.log("MIC", "Гарнитурный микрофон ВКЛ (${bt.productName}, ok=$ok)")
+@@ -951,6 +977,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
+             // Чистая модель: НЕ стираем поле и НЕ переносим текст в буфер.
+             // Буфер пустой, дописываем только НОВОЕ в позицию курсора.
+             dictBuffer.setLength(0)
++            lastDictApplied = ""
+             val kb = GolosRukiKeyboardService.instance
+             if (kb != null && kb.isActiveInput()) kb.beginDictation()
+             else VoiceAccessibilityService.instance?.beginDictationField()
+@@ -1794,14 +1821,26 @@ class VoiceRecognitionService : Service(), RecognitionListener {
+                 resetIdle(); return
+             }
+             resetIdle()
++            // v8.8 анти-дубль диктовки: Vosk нередко повторяет или наращивает финал одной фразы,
++            // отчего текст множился («…из автомобиля …из автомобиля»). Применяем только новую часть.
++            var toApply = text.trim()
++            when {
++                toApply.isBlank() -> return
++                toApply == lastDictApplied -> return                                          // точный повтор
++                lastDictApplied.isNotBlank() && lastDictApplied.startsWith(toApply) -> return  // усечённый повтор
++                lastDictApplied.isNotBlank() && toApply.startsWith(lastDictApplied) ->         // нарастающий финал → только дельта
++                    toApply = toApply.removePrefix(lastDictApplied).trim()
++            }
++            lastDictApplied = text.trim()
++            if (toApply.isBlank()) return
+             if (dictationDigits) {
+-                val chunk = NumberWords.toDigits(text)
++                val chunk = NumberWords.toDigits(toApply)
+                 if (chunk.isNotBlank()) {
+                     if (dictBuffer.isNotEmpty() && dictBuffer.last() != ' ' && dictBuffer.last() != '\n') dictBuffer.append(" ")
+                     dictBuffer.append(chunk); flushDictation()
+                 }
+             } else {
+-                applyDictation(text)
++                applyDictation(toApply)
+             }
+             return
+         }
+@@ -2255,6 +2294,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
+ 
+     override fun onDestroy() {
+         super.onDestroy()
++        handler.removeCallbacks(audioDiagPoll)
+         handler.removeCallbacks(idleRunnable)
+         unregisterCallListener()
+         listeningStop()

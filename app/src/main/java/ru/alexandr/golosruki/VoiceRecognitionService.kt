@@ -279,6 +279,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         recordingVoice = v
         handler.removeCallbacks(recordingOff)
         if (v) handler.postDelayed(recordingOff, 120_000)   // страховка от залипания
+        // v8.12: SCO теперь привязан к окну записи. true → поднять (встроенный мик освобождается мессенджеру,
+        // голосовое пишется со встроенного, а «отправь/отмена» слышим через гарнитуру); false → опустить
+        // (магнитольный ложный «вызов» гаснет сразу после отправки/отмены).
+        refreshMicForState()
         VoiceAccessibilityService.instance?.showStatus(stateText())
     }
     @Volatile var aiListening = false      // идёт свободный захват вопроса/текста для ИИ
@@ -563,7 +567,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                     val cb = afterSpeak
                     if (cb != null) {
                         afterSpeak = null
-                        handler.postDelayed({ isSpeaking = false; cb() }, speechTailGraceMs)
+                        handler.postDelayed({ fireAfterSpeak(cb) }, speechTailGraceMs)
                     } else {
                         scheduleResume(speechTailGraceMs)
                         post { if (!hasPendingHold()) VoiceAccessibilityService.instance?.releaseStatusHold() }
@@ -647,6 +651,17 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private fun scheduleResume(delay: Long) {
         handler.removeCallbacks(resumeAfterSpeak)
         handler.postDelayed(resumeAfterSpeak, delay)
+    }
+    /** v8.12: выполнить отложенное действие (afterSpeak) ТОЛЬКО когда синтезатор реально замолчал —
+     *  тот же анти-эхо-гейт, что в resumeAfterSpeak. Чинит самопетлю «поговорим»: ре-арм следующего хода
+     *  происходил, пока хвост ответа ещё звучал в динамике, и Vosk ловил собственную речь как новый вопрос. */
+    private fun fireAfterSpeak(cb: () -> Unit) {
+        if (antiEcho && runCatching { tts?.isSpeaking == true }.getOrDefault(false)) {
+            handler.postDelayed({ fireAfterSpeak(cb) }, 400L)
+            return
+        }
+        isSpeaking = false
+        cb()
     }
     // v8.11 ДИАГНОСТИКА: периодический опрос аудио-состояния (только логи). Самоперепланируется.
     private val audioDiagPoll: Runnable = object : Runnable {
@@ -740,7 +755,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.removeCallbacks(resumeAfterSpeak)   // НЕ возобновлять Vosk автоматически — действие решит само
         runCatching { tts?.speak(cleanForSpeech(text), android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "golosruki_then") }
         // страховка, если onDone не придёт
-        handler.postDelayed({ val cb = afterSpeak; if (cb != null) { afterSpeak = null; isSpeaking = false; cb() } }, 1800L + text.length * 90L + speechTailGraceMs)
+        handler.postDelayed({ val cb = afterSpeak; if (cb != null) { afterSpeak = null; fireAfterSpeak(cb) } }, 1800L + text.length * 90L + speechTailGraceMs)
     }
 
     private fun vibrateTick() {
@@ -868,7 +883,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
      *  иначе магнитола читает вход/выход MODE_IN_COMMUNICATION как конец звонка и САМА возобновляет музыку. */
     private fun wantHeadsetMic(): Boolean =
         SettingsStore.getBtMic(this) &&
-        (state == State.AWAKE || dictation || aiListening) &&
+        // v8.12: SCO поднимаем ТОЛЬКО на окно реального захвата (диктовка / вопрос-ИИ / диалог / запись
+        // голосового), а не на всю AWAKE-сессию. Иначе MODE_IN_COMMUNICATION висел до сна и магнитола
+        // (LADA Vesta = HFP) держала ложный «вызов» десятками секунд. Теперь канал гаснет сразу по концу
+        // захвата. aiDialog держит SCO между ходами «поговорим» — без мигания канала на каждой реплике.
+        (dictation || aiListening || aiDialog || recordingVoice) &&
         !callActive && !inCall() && !isMediaPlaying() && btScoMicAvailable()
 
     /** Берём/отпускаем микрофон гарнитуры через канал связи. Вызывается ТОЛЬКО при реальном наличии HFP. */
@@ -1160,6 +1179,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.removeCallbacks(idleRunnable)
         if (aiListening) { aiListening = false }
         state = State.ASLEEP
+        refreshMicForState()   // v8.12: уходя в сон — отпустить SCO (гаснет ложный «вызов» на магнитоле)
         if (!answerHeld) {   // не подменять текст ответа на «сон», пока идёт озвучка/чтение
             VoiceAccessibilityService.instance?.showStatus(stateText())
             VoiceAccessibilityService.instance?.keepScreenOn(false)

@@ -279,9 +279,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         recordingVoice = v
         handler.removeCallbacks(recordingOff)
         if (v) handler.postDelayed(recordingOff, 120_000)   // страховка от залипания
-        // v8.12: SCO теперь привязан к окну записи. true → поднять (встроенный мик освобождается мессенджеру,
-        // голосовое пишется со встроенного, а «отправь/отмена» слышим через гарнитуру); false → опустить
-        // (магнитольный ложный «вызов» гаснет сразу после отправки/отмены).
+        // v8.13: recordingVoice не входит в wantHeadsetMic, поэтому refreshMicForState под запись только
+        // ГАРАНТИРУЕТ NORMAL-режим (если SCO остался от предыдущего захвата — опустит), но НЕ поднимает
+        // comm-режим. Telegram пишет со встроенного в NORMAL — иначе запись срывается, см. wantHeadsetMic.
         refreshMicForState()
         VoiceAccessibilityService.instance?.showStatus(stateText())
     }
@@ -883,11 +883,13 @@ class VoiceRecognitionService : Service(), RecognitionListener {
      *  иначе магнитола читает вход/выход MODE_IN_COMMUNICATION как конец звонка и САМА возобновляет музыку. */
     private fun wantHeadsetMic(): Boolean =
         SettingsStore.getBtMic(this) &&
-        // v8.12: SCO поднимаем ТОЛЬКО на окно реального захвата (диктовка / вопрос-ИИ / диалог / запись
-        // голосового), а не на всю AWAKE-сессию. Иначе MODE_IN_COMMUNICATION висел до сна и магнитола
-        // (LADA Vesta = HFP) держала ложный «вызов» десятками секунд. Теперь канал гаснет сразу по концу
-        // захвата. aiDialog держит SCO между ходами «поговорим» — без мигания канала на каждой реплике.
-        (dictation || aiListening || aiDialog || recordingVoice) &&
+        // v8.12: SCO поднимаем ТОЛЬКО на окно реального захвата (диктовка / вопрос-ИИ / диалог), а не на
+        // всю AWAKE-сессию. Иначе MODE_IN_COMMUNICATION висел до сна и магнитола (LADA Vesta = HFP)
+        // держала ложный «вызов». aiDialog держит SCO между ходами «поговорим» — без мигания канала.
+        // v8.13: recordingVoice УБРАН. Под запись голосового вход в MODE_IN_COMMUNICATION посреди записи
+        // Telegram рвал её (срывалась за ~0.5 c, голосовое уходило пустым) и зажигал ложный «вызов».
+        // Мессенджер пишет со встроенного в NORMAL-режиме — аудиорежим под запись трогать нельзя.
+        (dictation || aiListening || aiDialog) &&
         !callActive && !inCall() && !isMediaPlaying() && btScoMicAvailable()
 
     /** Берём/отпускаем микрофон гарнитуры через канал связи. Вызывается ТОЛЬКО при реальном наличии HFP. */
@@ -1074,6 +1076,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (ask) lastAiQuestion = query     // для команды «подробнее»
         aiThinking = true
         handler.removeCallbacks(idleRunnable)   // не засыпать, пока модель думает
+        // v8.13: во время «думания» микрофон не нужен → отпустить SCO, чтобы магнитольный ложный «вызов»
+        // не висел всё время генерации (на плохой сети это были минуты). В диалоге «поговорим» (aiDialog)
+        // канал остаётся поднятым — wantHeadsetMic его удержит, без мигания между ходами.
+        refreshMicForState()
         val online = CloudAi.isConfigured(this) && Net.isOnline(this)
         VoiceAccessibilityService.instance?.showStatus(if (online) "🧠 Думаю (онлайн)…" else "🧠 Думаю…")
         Logger.log("AI", "Запрос (${if (ask) "спроси" else "сформулируй"}): '$query'")

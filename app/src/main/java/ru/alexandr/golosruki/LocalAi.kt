@@ -21,6 +21,18 @@ object LocalAi {
 
     fun clearHistory() { history.clear() }
 
+    /** v8.13: общий (wall-clock) дедлайн на блокирующий вызов. CloudAi.chat имеет readTimeout НА ОДНО
+     *  чтение (13с), а не на весь ответ — на плохой сети ответ тёк по байтам и тянулся минутами, «думаю»
+     *  висело 5 мин вместо отката на локальную. Здесь жёстко обрываем по времени → null → откат на офлайн. */
+    private fun <T> withTimeout(ms: Long, block: () -> T?): T? {
+        var result: T? = null
+        val t = Thread { result = try { block() } catch (e: Throwable) { null } }
+        t.isDaemon = true
+        t.start()
+        t.join(ms)
+        return if (t.isAlive) null else result
+    }
+
     private fun ensureEngine(ctx: Context) {
         if (initialized) return
         initialized = true
@@ -75,7 +87,7 @@ object LocalAi {
                     "Выдавай ТОЛЬКО итоговый текст, без пояснений, приветствий и подписи, если о них прямо не просят."
                 userC = "Составь текст по запросу: «$userText». Выдай только готовый текст."
             }
-            val cloud = CloudAi.chat(ctx, sysC, userC)
+            val cloud = withTimeout(16000) { CloudAi.chat(ctx, sysC, userC) }
             if (!cloud.isNullOrBlank()) {
                 Logger.log("AI", "Облачный ответ")
                 val out = clean(cloud)
@@ -85,7 +97,7 @@ object LocalAi {
                 }
                 return out
             }
-            Logger.log("AI", "Облако недоступно — откат на локальную модель")
+            Logger.log("AI", "Облако недоступно/таймаут — откат на локальную модель")
         }
 
         // Маршрутизация между слотами моделей (умная/простая) по режиму и сложности.

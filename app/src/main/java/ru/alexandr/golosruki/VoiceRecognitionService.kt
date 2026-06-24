@@ -31,6 +31,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var useNoiseSuppress = false            // тумблер (по умолчанию ВЫКЛ)
     @Volatile private var callActive = false                  // идёт мобильный звонок (NS на это время выключаем)
     private var phoneListener: android.telephony.PhoneStateListener? = null
+    // v8.14: приглушение музыки, чтобы микрофон слышал команды/«иван ответь» поверх музыки из колонок
+    // (в авто AEC не вытягивает — динамики далеко от мика). Сохраняем громкость → понижаем → возвращаем.
+    @Volatile private var musicDucked = false
+    private var savedMusicVol = -1
     private lateinit var personal: PersonalConfig
     private val handler = Handler(Looper.getMainLooper())
 
@@ -917,7 +921,35 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     /** Переключить движок под текущую цель (гарнитура↔встроенный) только если решение изменилось. */
     private fun refreshMicForState() {
+        updateMusicDuck()   // v8.14: при любой смене состояния пересчитать приглушение музыки
         if (wantHeadsetMic() != btScoOn) restartListening()
+    }
+
+    /** v8.14: музыку приглушаем, когда реально слушаем команды или идёт звонок. В ASLEEP (только
+     *  вейк-слово) музыку НЕ трогаем — иначе она была бы постоянно тихой. В авто музыка из колонок
+     *  глушила голос (AEC не помогает — динамики далеко от мика телефона). */
+    private fun wantMusicDuck(): Boolean =
+        callActive || state == State.AWAKE || dictation || aiListening || aiDialog
+
+    private fun updateMusicDuck() {
+        val want = wantMusicDuck()
+        if (want == musicDucked) return
+        runCatching {
+            val stream = android.media.AudioManager.STREAM_MUSIC
+            if (want) {
+                val max = audioManager.getStreamMaxVolume(stream)
+                savedMusicVol = audioManager.getStreamVolume(stream)
+                val target = (max * 0.15f).toInt().coerceAtLeast(1)
+                if (savedMusicVol > target) audioManager.setStreamVolume(stream, target, 0)
+                musicDucked = true
+                Logger.log("MIC", "Музыка приглушена для приёма команд ($savedMusicVol→$target)")
+            } else {
+                if (savedMusicVol >= 0) audioManager.setStreamVolume(stream, savedMusicVol, 0)
+                Logger.log("MIC", "Музыка восстановлена (→$savedMusicVol)")
+                musicDucked = false
+                savedMusicVol = -1
+            }
+        }
     }
 
     private fun restartListening() {
@@ -1617,6 +1649,11 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     override fun onResult(hypothesis: String?) {
+        handleResult(hypothesis)
+        updateMusicDuck()   // v8.14: после обработки результата синхронизировать приглушение с новым state
+    }
+
+    private fun handleResult(hypothesis: String?) {
         val raw = hypothesis?.let { JSONObject(it).optString("text") } ?: return
         val text = normalize(raw.replace("[unk]", " "))
         if (text.isBlank()) return
@@ -2297,6 +2334,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                     val active = state != android.telephony.TelephonyManager.CALL_STATE_IDLE
                     if (active != callActive) {
                         callActive = active
+                        updateMusicDuck()   // v8.14: на входящем приглушить музыку, чтобы «иван ответь» расслышался
                         Logger.log("CALL", if (active) "Звонок — шумоподавление временно ВЫКЛ"
                                            else "Звонок завершён — шумоподавление восстановлено")
                         restartListening()     // во время звонка — встроенный мик без NS; после — обратно

@@ -31,10 +31,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var useNoiseSuppress = false            // тумблер (по умолчанию ВЫКЛ)
     @Volatile private var callActive = false                  // идёт мобильный звонок (NS на это время выключаем)
     private var phoneListener: android.telephony.PhoneStateListener? = null
-    // v8.14: приглушение музыки, чтобы микрофон слышал команды/«иван ответь» поверх музыки из колонок
-    // (в авто AEC не вытягивает — динамики далеко от мика). Сохраняем громкость → понижаем → возвращаем.
+    // v8.14/8.15: приглушение музыки, чтобы микрофон слышал команды/«иван ответь» поверх музыки из
+    // колонок (в авто AEC не вытягивает — динамики далеко от мика). v8.15: через АУДИОФОКУС (MAY_DUCK),
+    // а не setStreamVolume — иначе абсолютная громкость A2DP дрейфовала вниз и терялась при рестарте
+    // сервиса. Фокус сам просит плеер притишиться и сам возвращает по отпусканию (переживает рестарт).
     @Volatile private var musicDucked = false
-    private var savedMusicVol = -1
+    private var duckFocusRequest: android.media.AudioFocusRequest? = null
     private lateinit var personal: PersonalConfig
     private val handler = Handler(Looper.getMainLooper())
 
@@ -935,19 +937,24 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         val want = wantMusicDuck()
         if (want == musicDucked) return
         runCatching {
-            val stream = android.media.AudioManager.STREAM_MUSIC
             if (want) {
-                val max = audioManager.getStreamMaxVolume(stream)
-                savedMusicVol = audioManager.getStreamVolume(stream)
-                val target = (max * 0.15f).toInt().coerceAtLeast(1)
-                if (savedMusicVol > target) audioManager.setStreamVolume(stream, target, 0)
+                val req = android.media.AudioFocusRequest.Builder(
+                        android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                    .setAudioAttributes(android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build())
+                    .setWillPauseWhenDucked(false)   // музыка не пауза, а тише — нам нужна тишина для мика
+                    .build()
+                val res = audioManager.requestAudioFocus(req)
+                duckFocusRequest = req
                 musicDucked = true
-                Logger.log("MIC", "Музыка приглушена для приёма команд ($savedMusicVol→$target)")
+                Logger.log("MIC", "Музыка приглушена (аудиофокус MAY_DUCK, res=$res)")
             } else {
-                if (savedMusicVol >= 0) audioManager.setStreamVolume(stream, savedMusicVol, 0)
-                Logger.log("MIC", "Музыка восстановлена (→$savedMusicVol)")
+                duckFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+                duckFocusRequest = null
                 musicDucked = false
-                savedMusicVol = -1
+                Logger.log("MIC", "Музыка восстановлена (аудиофокус отпущен)")
             }
         }
     }
@@ -2361,6 +2368,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.removeCallbacks(audioDiagPoll)
         handler.removeCallbacks(idleRunnable)
         unregisterCallListener()
+        duckFocusRequest?.let { runCatching { audioManager.abandonAudioFocusRequest(it) } }   // вернуть музыку
         listeningStop()
         model?.close()
         disableBtMic()

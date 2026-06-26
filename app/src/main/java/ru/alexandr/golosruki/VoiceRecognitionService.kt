@@ -931,11 +931,12 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (wantHeadsetMic() != btScoOn) restartListening()
     }
 
-    /** v8.14: музыку приглушаем, когда реально слушаем команды или идёт звонок. В ASLEEP (только
-     *  вейк-слово) музыку НЕ трогаем — иначе она была бы постоянно тихой. В авто музыка из колонок
-     *  глушила голос (AEC не помогает — динамики далеко от мика телефона). */
-    private fun wantMusicDuck(): Boolean =
-        callActive || state == State.AWAKE || dictation || aiListening || aiDialog
+    /** v8.14: музыку приглушаем поверх музыки из колонок, чтобы мик слышал голос (AEC не вытягивает —
+     *  динамики далеко от мика). v8.17: ТОЛЬКО на звонке/входящем. На командах/«думай» приглушение
+     *  через фокус оставляло плеер залипшим тихим (плеер игнорирует возврат фокуса — проверено логом
+     *  17:52→17:54: одно чистое отпускание, музыка не вернулась). На звонке возврат тянет телефония
+     *  (надёжно), поэтому там оставляем. Прямой setStreamVolume не вариант — дрейфует по A2DP. */
+    private fun wantMusicDuck(): Boolean = callActive
 
     private fun updateMusicDuck() {
         val want = wantMusicDuck()

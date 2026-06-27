@@ -1202,6 +1202,12 @@ class VoiceAccessibilityService : AccessibilityService() {
         } catch (e: Exception) { Logger.log("ACC", "Медиа: ${e.message}") }
     }
 
+    /** v8.19: пауза/плей плеера на время приёма команды поверх музыки. На этой магнитоле (LADA Vesta)
+     *  аудиофокус MAY_DUCK не возвращает плеер (проверено 8.17), а пауза/плей — слушается. Публичные,
+     *  чтобы VoiceRecognitionService мог поставить музыку на паузу, расслышать команду и вернуть. */
+    fun mediaPause() = mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
+    fun mediaPlay() = mediaKey(android.view.KeyEvent.KEYCODE_MEDIA_PLAY)
+
     // --- Пробуждение / разблокировка ---
     private fun doUnlock() {
         // «привет» имеет смысл только когда экран выключен или заблокирован

@@ -87,7 +87,7 @@ object LocalAi {
                     "Выдавай ТОЛЬКО итоговый текст, без пояснений, приветствий и подписи, если о них прямо не просят."
                 userC = "Составь текст по запросу: «$userText». Выдай только готовый текст."
             }
-            val cloud = withTimeout(16000) { CloudAi.chat(ctx, sysC, userC) }
+            val cloud = withTimeout(8000) { CloudAi.chat(ctx, sysC, userC) }   // v8.19: было 16с — слишком долго ждали на плохой сети
             if (!cloud.isNullOrBlank()) {
                 Logger.log("AI", "Облачный ответ")
                 val out = clean(cloud)

@@ -31,16 +31,15 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     @Volatile private var useNoiseSuppress = false            // тумблер (по умолчанию ВЫКЛ)
     @Volatile private var callActive = false                  // идёт мобильный звонок (NS на это время выключаем)
     private var phoneListener: android.telephony.PhoneStateListener? = null
-    // v8.14/8.15/8.16: приглушение музыки, чтобы микрофон слышал команды/«иван ответь» поверх музыки
-    // из колонок (в авто AEC не вытягивает — динамики далеко от мика). v8.15: через АУДИОФОКУС (MAY_DUCK),
-    // а не setStreamVolume — иначе абсолютная громкость A2DP дрейфовала и терялась при рестарте сервиса.
-    // v8.16: отпускаем фокус с ДЕБАУНСОМ — частые «отпустил→снова приглушил» оставляли плеер залипшим
-    // тихим (не успевал доехать до полной громкости). Теперь короткие переходы фокус не дёргают.
-    @Volatile private var musicDucked = false
-    private var duckFocusRequest: android.media.AudioFocusRequest? = null
-    // слушатель обязателен на части прошивок для корректного дакинга; мы ничего не воспроизводим — no-op
-    private val duckFocusListener = android.media.AudioManager.OnAudioFocusChangeListener { }
-    private val releaseDuckRunnable = Runnable { releaseDuckNow() }
+    // v8.14–8.17: приглушение музыки, чтобы микрофон слышал команды/«иван ответь» поверх музыки из
+    // колонок (в авто AEC не вытягивает — динамики далеко от мика). История рычагов:
+    //   8.14 setStreamVolume — дрейф громкости A2DP, не возвращал. 8.15–8.16 аудиофокус MAY_DUCK —
+    //   плеер этой магнитолы (LADA Vesta) игнорирует возврат фокуса, залипал тихим. 8.17 сузили до звонка.
+    // v8.19: НОВЫЙ рычаг — пауза/плей плеера (dispatchMediaKeyEvent). Этот плеер пауза/плей СЛУШАЕТСЯ
+    //   (пользователь сам так «расшевеливает» залипший звук). На время приёма команды музыку ставим на
+    //   ПАУЗУ (мик слышит чисто), после — ПЛЕЙ. Возврат надёжен + есть страховочный таймаут.
+    @Volatile private var musicPausedByUs = false   // музыку на паузу поставили МЫ (только тогда вернём плей)
+    private val resumeMusicRunnable = Runnable { resumeMusicNow() }
     private lateinit var personal: PersonalConfig
     private val handler = Handler(Looper.getMainLooper())
 
@@ -931,49 +930,35 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (wantHeadsetMic() != btScoOn) restartListening()
     }
 
-    /** v8.14: музыку приглушаем поверх музыки из колонок, чтобы мик слышал голос (AEC не вытягивает —
-     *  динамики далеко от мика). v8.17: ТОЛЬКО на звонке/входящем. На командах/«думай» приглушение
-     *  через фокус оставляло плеер залипшим тихим (плеер игнорирует возврат фокуса — проверено логом
-     *  17:52→17:54: одно чистое отпускание, музыка не вернулась). На звонке возврат тянет телефония
-     *  (надёжно), поэтому там оставляем. Прямой setStreamVolume не вариант — дрейфует по A2DP. */
-    private fun wantMusicDuck(): Boolean = callActive
+    /** v8.19: музыку ставим на ПАУЗУ, когда приложение реально слушает команду/вопрос (а не приглушаем
+     *  фокусом — этот плеер фокус не возвращает). Условие: идёт приём (AWAKE / захват / звонок). В ASLEEP
+     *  (ждём только вейк-слово) музыку НЕ трогаем — иначе стояла бы на паузе постоянно. */
+    private fun wantMusicPause(): Boolean =
+        callActive || state == State.AWAKE || dictation || aiListening || aiDialog
 
     private fun updateMusicDuck() {
-        val want = wantMusicDuck()
+        val want = wantMusicPause()
         if (want) {
-            handler.removeCallbacks(releaseDuckRunnable)   // отменить отложенное отпускание
-            if (!musicDucked) acquireDuckNow()
-        } else if (musicDucked) {
-            // отпускаем НЕ мгновенно: короткий «сон→снова команда» не должен дёргать плеер (залипал тихим)
-            handler.removeCallbacks(releaseDuckRunnable)
-            handler.postDelayed(releaseDuckRunnable, 3000)
+            handler.removeCallbacks(resumeMusicRunnable)   // отменить отложенный возврат
+            if (!musicPausedByUs && isMediaPlaying()) {     // ставим на паузу ТОЛЬКО реально играющую музыку
+                VoiceAccessibilityService.instance?.mediaPause()
+                musicPausedByUs = true
+                Logger.log("MIC", "Музыка на паузу (приём команды)")
+                // страховка: если приём затянется/команда не распознается — вернуть музыку через 20 c
+                handler.postDelayed(resumeMusicRunnable, 20000)
+            }
+        } else if (musicPausedByUs) {
+            // вернуть НЕ мгновенно: короткий «сон→снова команда» не должен дёргать плеер
+            handler.removeCallbacks(resumeMusicRunnable)
+            handler.postDelayed(resumeMusicRunnable, 1200)
         }
     }
 
-    private fun acquireDuckNow() {
-        runCatching {
-            val req = android.media.AudioFocusRequest.Builder(
-                    android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-                .setAudioAttributes(android.media.AudioAttributes.Builder()
-                    .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT)
-                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build())
-                .setWillPauseWhenDucked(false)   // музыка не пауза, а тише — нам нужна тишина для мика
-                .setOnAudioFocusChangeListener(duckFocusListener, handler)
-                .build()
-            val res = audioManager.requestAudioFocus(req)
-            duckFocusRequest = req
-            musicDucked = true
-            Logger.log("MIC", "Музыка приглушена (аудиофокус MAY_DUCK, res=$res)")
-        }
-    }
-
-    private fun releaseDuckNow() {
-        if (!musicDucked) return
-        runCatching { duckFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) } }
-        duckFocusRequest = null
-        musicDucked = false
-        Logger.log("MIC", "Музыка восстановлена (аудиофокус отпущен)")
+    private fun resumeMusicNow() {
+        if (!musicPausedByUs) return
+        VoiceAccessibilityService.instance?.mediaPlay()
+        musicPausedByUs = false
+        Logger.log("MIC", "Музыка возобновлена")
     }
 
     private fun restartListening() {
@@ -2393,8 +2378,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         handler.removeCallbacks(audioDiagPoll)
         handler.removeCallbacks(idleRunnable)
         unregisterCallListener()
-        handler.removeCallbacks(releaseDuckRunnable)
-        releaseDuckNow()   // вернуть музыку (на всякий — ОС и сама снимет фокус при смерти процесса)
+        handler.removeCallbacks(resumeMusicRunnable)
+        resumeMusicNow()   // v8.19: если музыку ставили на паузу — вернуть при остановке сервиса
         listeningStop()
         model?.close()
         disableBtMic()

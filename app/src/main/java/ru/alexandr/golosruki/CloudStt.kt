@@ -33,8 +33,8 @@ object CloudStt {
         return try {
             conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
-                connectTimeout = 6000
-                readTimeout = 20000
+                connectTimeout = 4000
+                readTimeout = 8000   // v8.19: было 20с — на плохой сети висело 23с перед откатом на Vosk
                 doOutput = true
                 setRequestProperty("Authorization", "Bearer $key")
                 setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")

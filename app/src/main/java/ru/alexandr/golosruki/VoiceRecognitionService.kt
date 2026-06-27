@@ -1086,11 +1086,19 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             return
         }
         aiAsk = ask
-        // Вопрос/текст захватываем свободным офлайн-распознаванием (Vosk) — надёжно и без сети.
-        // (Облачный Whisper для диктовки вопроса отключён: на нестабильной сети он давал таймауты.)
+        // v8.18: если онлайн-STT (Whisper) настроен И есть сеть — захватываем вопрос облаком.
+        // Vosk идёт по грамматике (Vocabulary.kt) и не знает редких/медицинских слов: «дефолаг»→«блюз
+        // фолк». Whisper — полноценная языковая модель, распознаёт свободную речь точно.
+        // startCloudCapture сам откатывается на Vosk-захват, если Whisper вернул пусто/ошибку (плохая
+        // сеть) — поэтому потери захвата не будет. Таймаут чтения в CloudStt — 20 c (см. CloudStt.kt).
+        if (CloudStt.isConfigured(this) && Net.isOnline(this)) {
+            startCloudCapture(ask)
+            return
+        }
+        // Офлайн / онлайн-STT выключен — свободный захват через Vosk.
         aiListening = true
         VoiceAccessibilityService.instance?.showStatus(stateText())
-        Logger.log("AI", "Захват ${if (ask) "вопроса" else "текста"} для ИИ")
+        Logger.log("AI", "Захват ${if (ask) "вопроса" else "текста"} для ИИ (офлайн Vosk)")
         restartListening()   // свободное распознавание
         resetIdle()
     }

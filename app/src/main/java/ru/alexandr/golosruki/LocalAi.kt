@@ -21,6 +21,24 @@ object LocalAi {
 
     fun clearHistory() { history.clear() }
 
+    /** v8.19: сырая локальная генерация по произвольным system/user — для планировщика (JSON-разбор)
+     *  и других мест, где нужен ЛОКАЛЬНЫЙ откат, когда облако недоступно (429/таймаут/офлайн).
+     *  Возвращает сырой текст модели или null, если ни одна модель не установлена / генерация упала. */
+    fun generateRaw(ctx: Context, sys: String, user: String, preferSmart: Boolean = true): String? {
+        ensureEngine(ctx)
+        val smartPath = SettingsStore.getAiModelPath(ctx)
+        val simplePath = SettingsStore.getAiModelSimplePath(ctx)
+        val smartOk = MediaPipeEngine.modelInstalledAt(smartPath)
+        val simpleOk = MediaPipeEngine.modelInstalledAt(simplePath)
+        if (!smartOk && !simpleOk) return null
+        val chosen = if (preferSmart) (if (smartOk) smartPath else simplePath)
+                     else (if (simpleOk) simplePath else smartPath)
+        val useSmart = (chosen == smartPath)
+        engine.useModel(chosen)
+        engine.setLowResource(!useSmart)
+        return runCatching { engine.generate(sys, user) }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
     /** v8.13: общий (wall-clock) дедлайн на блокирующий вызов. CloudAi.chat имеет readTimeout НА ОДНО
      *  чтение (13с), а не на весь ответ — на плохой сети ответ тёк по байтам и тянулся минутами, «думаю»
      *  висело 5 мин вместо отката на локальную. Здесь жёстко обрываем по времени → null → откат на офлайн. */
@@ -32,6 +50,10 @@ object LocalAi {
         t.join(ms)
         return if (t.isAlive) null else result
     }
+
+    /** v8.19: публичный wall-clock дедлайн для облачных вызовов из других мест (напр. Secretary.plan).
+     *  Возвращает null при таймауте/ошибке → вызывающий делает локальный откат. */
+    fun <T> tryCloud(ms: Long, block: () -> T?): T? = withTimeout(ms, block)
 
     private fun ensureEngine(ctx: Context) {
         if (initialized) return

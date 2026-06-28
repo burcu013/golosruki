@@ -52,8 +52,21 @@ object Secretary {
             "Известные проекты: $projects. Известные люди: $people."
         val user = "Текущие дата и время: $nowStr. Фраза: \"$text\""
 
-        val raw = CloudAi.chat(ctx, system, user)
-            ?: return PlanResult(false, "", "", "", "", 60, 0, 0, false, CloudAi.lastError.ifBlank { "нет ответа модели" })
+        // v8.19: облако с быстрым дедлайном (8с), при недоступности (429/таймаут/офлайн) — ОТКАТ на
+        // локальную модель. Раньше plan() падал на CloudAi с ошибкой и НЕ пробовал офлайн (баг #5).
+        val online = CloudAi.isConfigured(ctx) && Net.isOnline(ctx)
+        var raw: String? = null
+        if (online) {
+            raw = LocalAi.tryCloud(8000) { CloudAi.chat(ctx, system, user) }
+            if (raw.isNullOrBlank()) Logger.log("SEC", "Планировщик: облако недоступно/429 — откат на локальную модель")
+        }
+        if (raw.isNullOrBlank()) {
+            raw = LocalAi.generateRaw(ctx, system, user, preferSmart = true)
+        }
+        if (raw.isNullOrBlank()) {
+            return PlanResult(false, "", "", "", "", 60, 0, 0, false,
+                if (online) "не понял" else "нет связи и локальная модель недоступна")
+        }
         val obj = extractJson(raw) ?: return PlanResult(false, "", "", "", "", 60, 0, 0, false, "не понял")
 
         val title = obj.optString("title").trim()

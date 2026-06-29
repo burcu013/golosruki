@@ -112,14 +112,18 @@ object Secretary {
         val allDay = !hasTime
 
         // Маршрутизация по намерению (тип задаёт фраза-триггер).
-        var kind = hintKind
-        // Напоминание без конкретного времени превращаем в задачу (нечего «звонить»).
-        if (kind == "reminder" && (!hasDate || !hasTime)) kind = "task"
+        val kind = hintKind
 
         return when (kind) {
             "task" -> PlanResult(true, title, person, project, note, duration, reminder,
                 startMillis, allDay, "", "task", 0)
             "reminder" -> {
+                // v8.22: НЕ превращаем молча в задачу при отсутствии времени — это путало пользователя
+                // (сказал «напомни», получил задачу). Если нет ни времени, ни повтора — просим уточнить.
+                if (!hasTime && repeatMin == 0) {
+                    return PlanResult(false, title, person, project, note, duration, 0, 0, false,
+                        "need_time", "reminder", 0)
+                }
                 var sm = startMillis
                 if (repeatMin == 0 && sm in 1..System.currentTimeMillis()) sm += 86_400_000L  // время уже прошло — на завтра
                 PlanResult(true, title, person, project, note, duration, 0,
@@ -241,8 +245,57 @@ object Secretary {
      * (если совсем ничего не вытащил — тогда выше попробуют локальную LLM).
      * Покрывает явные случаи; хитрые формулировки оставляем облаку/LLM.
      */
+    // v8.22: словарь числительных 0..59 для разбора времени словами.
+    private val numWords: Map<String, Int> by lazy {
+        val m = mutableMapOf<String, Int>()
+        val units = listOf("ноль","один","два","три","четыре","пять","шесть","семь","восемь","девять",
+            "десять","одиннадцать","двенадцать","тринадцать","четырнадцать","пятнадцать","шестнадцать",
+            "семнадцать","восемнадцать","девятнадцать")
+        units.forEachIndexed { i, w -> m[w] = i }
+        // варианты «одна/две» для минут
+        m["одна"] = 1; m["две"] = 2
+        val tens = mapOf("двадцать" to 20, "тридцать" to 30, "сорок" to 40, "пятьдесят" to 50)
+        for ((tw, tv) in tens) {
+            m[tw] = tv
+            for (u in 1..9) m["$tw ${units[u]}"] = tv + u
+            if (tv == 20 || tv == 30) { m["$tw одна"] = tv + 1; m["$tw две"] = tv + 2 }
+        }
+        m
+    }
+
+    /** v8.22: «шестнадцать пятьдесят» → «16:50», «девять часов тридцать минут» → «9:30».
+     *  Whisper иногда отдаёт время словами; без нормализации оно не ловилось и reminder уходил в task. */
+    private fun normalizeSpokenTime(s: String): String {
+        var out = s
+        // «N часов M минут» / «N часов»
+        Regex("(\\d{1,2}|[а-я]+(?: [а-я]+)?) час\\w*(?: (\\d{1,2}|[а-я]+(?: [а-я]+)?) минут\\w*)?")
+            .findAll(s).forEach { m ->
+                val h = m.groupValues[1].toIntOrNull() ?: numWords[m.groupValues[1].trim()]
+                val mn = if (m.groupValues[2].isBlank()) 0
+                         else (m.groupValues[2].toIntOrNull() ?: numWords[m.groupValues[2].trim()] ?: 0)
+                if (h != null && h in 0..23) out = out.replace(m.value, "в %d:%02d".format(h, mn))
+            }
+        // «<час словами> <минуты словами>» рядом (16:50 = «шестнадцать пятьдесят»):
+        // перебираем известные словесные часы (0..23) и за ними словесные минуты (0..59).
+        for (hWord in numWords.keys.sortedByDescending { it.length }) {
+            val hv = numWords[hWord] ?: continue
+            if (hv !in 0..23) continue
+            for (mWord in numWords.keys.sortedByDescending { it.length }) {
+                val mv = numWords[mWord] ?: continue
+                if (mv !in 0..59) continue
+                val phrase = "$hWord $mWord"
+                if (out.contains(phrase)) out = out.replace(phrase, "%d:%02d".format(hv, mv))
+            }
+        }
+        // схлопнуть возможное двойное «в в 16:50» → «в 16:50»
+        out = out.replace(Regex("\\bв в "), "в ")
+        return out
+    }
+
     private fun localParse(text: String, hintKind: String, now: Calendar): String? {
-        val t = " " + text.lowercase(ru).trim() + " "
+        // v8.22: сначала нормализуем числительные словами в цифры времени («шестнадцать пятьдесят»→«16:50»),
+        // иначе Whisper-вариант словами не ловился regex'ом → reminder молча уходил в task (баг с «мамой»).
+        val t = " " + normalizeSpokenTime(text.lowercase(ru).trim()) + " "
         val cal = now.clone() as Calendar
         cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
         var hasDate = false
@@ -310,8 +363,8 @@ object Secretary {
 
         // --- ВРЕМЯ (если ещё не задано через «через N часов») ---
         if (!hasTime) {
-            // «в 9», «в 14:30», «в 9 утра/вечера»
-            val tm = Regex("в (\\d{1,2})[:.](\\d{2})").find(t) ?: Regex("в (\\d{1,2}) (час\\w*|утра|вечера|дня|ночи)?").find(t)
+            // «в 9», «в 14:30», «16:50» (предлог опционален — нормализатор мог убрать «в»)
+            val tm = Regex("в? ?(\\d{1,2})[:.](\\d{2})").find(t) ?: Regex("в (\\d{1,2}) (час\\w*|утра|вечера|дня|ночи)?").find(t)
             if (tm != null) {
                 var h = tm.groupValues[1].toIntOrNull() ?: -1
                 val mn = tm.groupValues.getOrNull(2)?.toIntOrNull() ?: 0
@@ -340,7 +393,7 @@ object Secretary {
         val strip = listOf(
             "\\bпослезавтра\\b", "\\bзавтра\\b", "\\bсегодня\\b", "\\bобязательно\\b",
             "через \\d+ (?:дн\\w*|недел\\w*|час\\w*|минут\\w*)", "через недел\\w*", "через час\\w*", "через полчаса",
-            "в \\d{1,2}[:.]\\d{2}", "в \\d{1,2} (?:час\\w*|утра|вечера|дня|ночи)", "в \\d{1,2}\\b",
+            "в? ?\\d{1,2}[:.]\\d{2}", "в \\d{1,2} (?:час\\w*|утра|вечера|дня|ночи)", "в \\d{1,2}\\b",
             "кажд\\w* день", "кажд\\w* недел\\w*", "кажд\\w* час", "ежедневн\\w*", "еженедельн\\w*",
             "утром", "вечером", "днём", "днем", "\\bв понедельник\\b", "\\bво вторник\\b", "\\bв среду\\b",
             "\\bв четверг\\b", "\\bв пятницу\\b", "\\bв субботу\\b", "\\bв воскресенье\\b"

@@ -363,6 +363,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     private var pendingContactChoice: List<Contacts.C>? = null   // несколько совпадений — ждём номер выбора
     private var pendingPlan: PlanResult? = null   // разобранный план — ждёт подтверждения «да/нет»
     private var planKind = "event"                // тип создаваемой записи: event | task | reminder
+    private var pendingReminderText = ""          // v8.22: суть напоминания, ждём уточнения времени
     private var pendingTaskDone: List<Task>? = null   // выбор задачи для завершения (по номеру)
     private var pendingReminderCancel: List<Reminder>? = null   // выбор напоминания для отмены (по номеру)
     private var pendingEventCancel: List<CalendarReader.EventItem>? = null   // выбор события для отмены (по номеру)
@@ -1380,10 +1381,16 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         aiThinking = true
         handler.removeCallbacks(idleRunnable)
         VoiceAccessibilityService.instance?.showStatus("📝 Обрабатываю…")
-        Logger.log("SEC", "План ($planKind): '$text'")
+        // v8.22: если ждём время для напоминания — склеиваем сохранённую суть с ответом (где время)
+        var work = text
+        if (pendingReminderText.isNotBlank()) {
+            work = "$text $pendingReminderText"
+            pendingReminderText = ""
+        }
+        Logger.log("SEC", "План ($planKind): '$work'")
         val kind = planKind
         Thread {
-            val p = Secretary.plan(this, text, kind)
+            val p = Secretary.plan(this, work, kind)
             val conflict = if (p.ok && p.kind == "event" && !p.allDay) {
                 val busy = CalendarReader.busyBetween(this, p.startMillis, p.startMillis + p.durationMin * 60_000L)
                 if (busy.isNotEmpty()) "Внимание: в это время уже есть — ${busy.joinToString(", ")}. " else ""
@@ -1392,8 +1399,17 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 aiThinking = false
                 restartListening(); resetIdle()
                 if (!p.ok) {
-                    speak("Не получилось: ${p.error}. Повторите по-другому.")
-                    VoiceAccessibilityService.instance?.showStatus("Не понял: ${p.error}")
+                    if (p.error == "need_time") {
+                        // v8.22: «напомни» без времени — переспрашиваем, сохранив суть, и слушаем время заново
+                        pendingReminderText = p.title
+                        VoiceAccessibilityService.instance?.showStatus("🔔 На какое время напомнить?")
+                        speak("На какое время напомнить?")
+                        planKind = "reminder"; planning = true; aiListening = true; aiAsk = false
+                        restartListening(); resetIdle()
+                    } else {
+                        speak("Не получилось: ${p.error}. Повторите по-другому.")
+                        VoiceAccessibilityService.instance?.showStatus("Не понял: ${p.error}")
+                    }
                 } else if (p.kind == "task") {
                     addPlannedTask(p)   // задачу добавляем сразу, без «да/нет»
                 } else {
@@ -1407,8 +1423,28 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         }.start()
     }
 
+    /** v8.22: защита от дублей — тот же текст плана за последние 2 минуты считаем повтором. */
+    private fun isRecentDuplicate(title: String, isReminder: Boolean): Boolean {
+        val now = System.currentTimeMillis()
+        val key = title.lowercase(java.util.Locale("ru")).trim()
+        val m = Secretary.mem(this)
+        return try {
+            if (isReminder) m.reminders().any {
+                it.status == "active" && it.text.lowercase(java.util.Locale("ru")).trim() == key && now - it.created < 120_000L
+            } else m.openTasks().any {
+                it.title.lowercase(java.util.Locale("ru")).trim() == key && now - it.created < 120_000L
+            }
+        } catch (e: Exception) { false }
+    }
+
     /** Добавить задачу сразу (без подтверждения) — это «дело» со статусом, без блокировки времени. */
     private fun addPlannedTask(p: PlanResult) {
+        if (isRecentDuplicate(p.title, false)) {
+            Logger.log("SEC", "Дубль задачи проигнорирован: ${p.title}")
+            speak("Такая задача уже есть")
+            VoiceAccessibilityService.instance?.showStatus("🗂 Уже есть: ${p.title}")
+            return
+        }
         val m = Secretary.mem(this)
         val task = Task(java.util.UUID.randomUUID().toString(), p.title, p.person, p.project,
             p.startMillis, 0, p.note, "open", System.currentTimeMillis())
@@ -1422,6 +1458,13 @@ class VoiceRecognitionService : Service(), RecognitionListener {
 
     private fun commitPlan(p: PlanResult) {
         if (p.kind == "reminder") {
+            if (isRecentDuplicate(p.title, true)) {
+                Logger.log("SEC", "Дубль напоминания проигнорирован: ${p.title}")
+                speak("Такое напоминание уже есть")
+                VoiceAccessibilityService.instance?.showStatus("🔔 Уже есть: ${p.title}")
+                restartListening(); resetIdle()
+                return
+            }
             val r = Reminder(java.util.UUID.randomUUID().toString(), p.title, p.startMillis, p.repeatMin,
                 "active", System.currentTimeMillis())
             Thread {

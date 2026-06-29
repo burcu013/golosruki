@@ -169,7 +169,7 @@ object Secretary {
         val system = "Ты — личный секретарь. Отвечай КРАТКО и для озвучки вслух, ТОЛЬКО по данным из памяти ниже. " +
             "Если данных по вопросу нет — честно скажи, что в памяти ничего нет. Без markdown, без списков-маркеров, обычной речью."
         val user = "Память:\n$ctxText\n\nВопрос: $question"
-        return CloudAi.chat(ctx, system, user)?.takeIf { it.isNotBlank() }
+        return (LocalAi.tryCloud(8000) { CloudAi.chat(ctx, system, user) })?.takeIf { it.isNotBlank() }
             ?: if (tasks.isEmpty() && log.isEmpty()) "В памяти ничего нет по этому вопросу." else listTasks(tasks)
     }
 
@@ -265,28 +265,94 @@ object Secretary {
 
     /** v8.22: «шестнадцать пятьдесят» → «16:50», «девять часов тридцать минут» → «9:30».
      *  Whisper иногда отдаёт время словами; без нормализации оно не ловилось и reminder уходил в task. */
+    /** v8.22/8.23: «шестнадцать пятьдесят»→«16:50», «двадцать два пятьдесят»→«22:50»,
+     *  «двадцать два часа»→«22:00», «девять часов тридцать минут»→«9:30».
+     *  Токенный разбор слева направо: жадно собираем ЧАС (десяток+единица или одно слово, 0..23),
+     *  затем МИНУТЫ (десяток+единица или одно слово, 0..59). Различаем составной час «двадцать два»(22)
+     *  от «час:минута»: если за десятком идёт ЕДИНИЦА (1..9) — это составное число (22), а не минуты. */
     private fun normalizeSpokenTime(s: String): String {
-        var out = s
-        // «N часов M минут» / «N часов»
-        Regex("(\\d{1,2}|[а-я]+(?: [а-я]+)?) час\\w*(?: (\\d{1,2}|[а-я]+(?: [а-я]+)?) минут\\w*)?")
-            .findAll(s).forEach { m ->
-                val h = m.groupValues[1].toIntOrNull() ?: numWords[m.groupValues[1].trim()]
-                val mn = if (m.groupValues[2].isBlank()) 0
-                         else (m.groupValues[2].toIntOrNull() ?: numWords[m.groupValues[2].trim()] ?: 0)
-                if (h != null && h in 0..23) out = out.replace(m.value, "в %d:%02d".format(h, mn))
+        // v8.23: «через N часов/минут» — это ОТНОСИТЕЛЬНОЕ время (обрабатывается в localParse отдельно),
+        // НЕ преобразуем его в абсолютное HH:MM. Если фраза содержит «через» — нормализацию времени суток
+        // не применяем к части после «через». Простая защита: если есть «через <число> час/минут» — выходим
+        // для этого фрагмента. Делаем грубо: помечаем, что «через» присутствует, и пропускаем «N час» рядом.
+        val tens = setOf("двадцать", "тридцать", "сорок", "пятьдесят")
+        // helper: прочитать число из токенов начиная с i; вернуть (значение, сколько токенов съели) или null
+        fun readNum(toks: List<String>, i: Int): Pair<Int, Int>? {
+            if (i >= toks.size) return null
+            val w = toks[i]
+            if (w in tens) {
+                // десяток, возможно + единица
+                val base = numWords[w] ?: return null
+                if (i + 1 < toks.size) {
+                    val u = numWords[toks[i + 1]]
+                    if (u != null && u in 1..9) return Pair(base + u, 2)
+                }
+                return Pair(base, 1)
             }
-        // «<час словами> <минуты словами>» рядом (16:50 = «шестнадцать пятьдесят»):
-        // перебираем известные словесные часы (0..23) и за ними словесные минуты (0..59).
-        for (hWord in numWords.keys.sortedByDescending { it.length }) {
-            val hv = numWords[hWord] ?: continue
-            if (hv !in 0..23) continue
-            for (mWord in numWords.keys.sortedByDescending { it.length }) {
-                val mv = numWords[mWord] ?: continue
-                if (mv !in 0..59) continue
-                val phrase = "$hWord $mWord"
-                if (out.contains(phrase)) out = out.replace(phrase, "%d:%02d".format(hv, mv))
-            }
+            val v = numWords[w] ?: return null
+            return Pair(v, 1)
         }
+
+        // обрабатываем «N часов [M минут]» отдельно (явный маркер «час»), НО не после «через»
+        var out = s
+        Regex("(\\d{1,2}) час\\w*(?: (\\d{1,2}) минут\\w*)?").findAll(s).forEach { m ->
+            val before = s.substring(0, m.range.first).trimEnd()
+            if (before.endsWith("через")) return@forEach   // «через N часов» — относительное, не трогаем
+            val h = m.groupValues[1].toIntOrNull()
+            val mn = m.groupValues[2].toIntOrNull() ?: 0
+            if (h != null && h in 0..23) out = out.replace(m.value, "в %d:%02d".format(h, mn))
+        }
+
+        // токенный разбор «час минута» словами
+        val toks = Regex("[а-яё]+|\\d+").findAll(out).map { it.value }.toList()
+        var i = 0
+        var replaced = out
+        while (i < toks.size) {
+            // не трогаем число, если перед ним «через» (относительное время, обрабатывает localParse)
+            if (i > 0 && toks[i - 1] == "через") { i++; continue }
+            val h = readNum(toks, i)
+            if (h != null && h.first in 0..23) {
+                val after = i + h.second
+                // есть ли «час/часов» сразу после — тогда это часы, минуты опционально
+                val hasHourWord = after < toks.size && toks[after].startsWith("час")
+                val mStart = if (hasHourWord) after + 1 else after
+                val mn = readNum(toks, mStart)
+                if (mn != null && mn.first in 0..59 && (hasHourWord || mn.second >= 1)) {
+                    // защита от составного часа: «двадцать два» (десяток+единица) без маркера «час»
+                    // и без последующих минут — это число, не время. Но если minute распознан как
+                    // десяток(+ед) — это минуты. Если minute это единица 1..9 после простого часа — тоже минуты.
+                    val phrase = toks.subList(i, mStart + mn.second).joinToString(" ")
+                    if (replaced.contains(phrase)) {
+                        replaced = replaced.replaceFirst(phrase, "в %d:%02d".format(h.first, mn.first))
+                        i = mStart + mn.second
+                        continue
+                    }
+                } else if (hasHourWord) {
+                    // «двадцать два часа» без минут → 22:00
+                    val phrase = toks.subList(i, after + 1).joinToString(" ")
+                    if (replaced.contains(phrase)) {
+                        replaced = replaced.replaceFirst(phrase, "в %d:00".format(h.first))
+                        i = after + 1
+                        continue
+                    }
+                }
+            }
+            i++
+        }
+        out = replaced
+        // «N часов M минут» уже свёрнуто; убрать остаточное «минут» после «в H:MM минут»
+        out = out.replace(Regex("(в \\d{1,2}:\\d{2}) минут\\w*"), "$1")
+        // одиночный словесный час с предлогом: «в десять» → «в 10:00»; «в девять вечера» → «в 21:00»
+        Regex("\\bв ([а-яё]+)(?: (утра|вечера|дня|ночи))?\\b").findAll(out).forEach { m ->
+            var v = numWords[m.groupValues[1]] ?: return@forEach
+            if (v !in 0..23) return@forEach
+            val suf = m.groupValues[2]
+            if ((suf == "вечера" || suf == "дня") && v in 1..11) v += 12
+            if (suf == "ночи" && v == 12) v = 0
+            out = out.replace(m.value, "в %d:00".format(v))
+        }
+        // «в H:MM ноль» — хвост второго «ноль» из «ноль ноль» → убрать
+        out = out.replace(Regex("(в \\d{1,2}:\\d{2}) ноль\\b"), "$1")
         // схлопнуть возможное двойное «в в 16:50» → «в 16:50»
         out = out.replace(Regex("\\bв в "), "в ")
         return out
@@ -389,7 +455,8 @@ object Secretary {
         }
 
         // --- ЗАГОЛОВОК: чистим служебные слова даты/времени/повтора ---
-        var title = text.trim()
+        // title берём из НОРМАЛИЗОВАННОГО текста (словесное время уже стало «16:50»), чтобы strip его убрал.
+        var title = normalizeSpokenTime(text.lowercase(ru)).trim()
         val strip = listOf(
             "\\bпослезавтра\\b", "\\bзавтра\\b", "\\bсегодня\\b", "\\bобязательно\\b",
             "через \\d+ (?:дн\\w*|недел\\w*|час\\w*|минут\\w*)", "через недел\\w*", "через час\\w*", "через полчаса",
@@ -400,7 +467,7 @@ object Secretary {
         )
         for (p in strip) title = title.replace(Regex(p, RegexOption.IGNORE_CASE), " ")
         title = title.replace(Regex("\\s+"), " ").trim().trimStart(',', '.', ' ').trim()
-        if (title.isBlank()) title = text.trim()   // если вычистили всё — вернём исходное
+        if (title.isBlank()) title = normalizeSpokenTime(text.lowercase(ru)).trim()   // если вычистили всё
 
         // если совсем ничего не распознали (ни даты, ни повтора) и это event — пусть пробует LLM
         if (!hasDate && repeatMin == 0 && hintKind == "event") return null

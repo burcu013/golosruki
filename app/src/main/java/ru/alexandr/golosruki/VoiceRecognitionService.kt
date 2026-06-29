@@ -1076,7 +1076,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         // Vosk идёт по грамматике (Vocabulary.kt) и не знает редких/медицинских слов: «дефолаг»→«блюз
         // фолк». Whisper — полноценная языковая модель, распознаёт свободную речь точно.
         // startCloudCapture сам откатывается на Vosk-захват, если Whisper вернул пусто/ошибку (плохая
-        // сеть) — поэтому потери захвата не будет. Таймаут чтения в CloudStt — 20 c (см. CloudStt.kt).
+        // сеть) — поэтому потери захвата не будет. Таймаут чтения в CloudStt — 8 c (см. CloudStt.kt, v8.19).
         if (CloudStt.isConfigured(this) && Net.isOnline(this)) {
             startCloudCapture(ask)
             return
@@ -1090,13 +1090,20 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     @Volatile private var cloudCapturing = false
+    @Volatile private var captureMode = "ai_ask"   // v8.23: режим облачного захвата (ai_ask|ai_compose|plan|memory)
 
     /** Облачный захват речи: освобождаем мик у Vosk, пишем сегмент, шлём в Whisper, результат → ИИ. */
-    private fun startCloudCapture(ask: Boolean) {
+    /** v8.23: универсальный облачный захват (Whisper) для ЛЮБОЙ свободной речи — вопрос для ИИ,
+     *  план секретаря, вопрос к памяти. Точное распознавание (Vosk коверкал заголовки/вопросы).
+     *  mode: "ai_ask" | "ai_compose" | "plan" | "memory". При пустом Whisper — откат на Vosk-захват
+     *  в том же режиме (плохая сеть/429 не теряет ввод). */
+    private fun startCloudCapture(ask: Boolean, mode: String = "ai_ask") {
         cloudCapturing = true
+        captureMode = mode
         handler.removeCallbacks(idleRunnable)
+        updateMusicDuck()   // v8.23: пауза музыки на время облачной записи — иначе Whisper пишет музыку из колонок
         VoiceAccessibilityService.instance?.showStatus("🎤 Слушаю (онлайн)…")
-        Logger.log("STT", "Облачный захват (${if (ask) "вопрос" else "текст"})")
+        Logger.log("STT", "Облачный захват ($mode)")
         listeningStop()   // освободить микрофон от Vosk
         Thread {
             try { Thread.sleep(200) } catch (e: InterruptedException) {}   // дать мику освободиться
@@ -1109,14 +1116,22 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             post {
                 cloudCapturing = false
                 if (text.isNullOrBlank()) {
-                    Logger.log("STT", "Пусто/ошибка: ${CloudStt.lastError}")
-                    // Откат: свободный захват через Vosk (офлайн-распознавание).
-                    aiListening = true
+                    Logger.log("STT", "Пусто/ошибка: ${CloudStt.lastError} — откат на Vosk ($mode)")
+                    // Откат: свободный захват через Vosk (офлайн) в ТОМ ЖЕ режиме.
+                    when (mode) {
+                        "plan" -> { planning = true; aiListening = true; aiAsk = false }
+                        "memory" -> { querying = true; aiListening = true; aiAsk = false }
+                        else -> { aiListening = true }
+                    }
                     VoiceAccessibilityService.instance?.showStatus(stateText())
                     restartListening(); resetIdle()
                 } else {
                     Logger.log("STT", "Whisper: '$text'")
-                    handleAi(ask, text)
+                    when (mode) {
+                        "plan" -> handlePlan(text)
+                        "memory" -> handleQuery(text)
+                        else -> handleAi(ask, text)
+                    }
                 }
             }
         }.start()
@@ -1362,16 +1377,21 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             return
         }
         planKind = kind
+        aiAsk = false
+        Logger.log("SEC", "Захват ($kind)")
+        // v8.23: захват плана через Whisper (точно), иначе Vosk. Vosk коверкал заголовки задач.
+        if (CloudStt.isConfigured(this) && Net.isOnline(this)) {
+            startCloudCapture(false, "plan")
+            return
+        }
         planning = true
         aiListening = true
-        aiAsk = false
         val prompt = when (kind) {
             "reminder" -> "🔔 Слушаю напоминание… когда и о чём напомнить"
             "task" -> "🗂 Слушаю задачу… что добавить в дела"
             else -> "📝 Слушаю план… что запланировать"
         }
         VoiceAccessibilityService.instance?.showStatus(prompt)
-        Logger.log("SEC", "Захват ($kind)")
         restartListening()   // свободное распознавание
         resetIdle()
     }
@@ -1400,12 +1420,18 @@ class VoiceRecognitionService : Service(), RecognitionListener {
                 restartListening(); resetIdle()
                 if (!p.ok) {
                     if (p.error == "need_time") {
-                        // v8.22: «напомни» без времени — переспрашиваем, сохранив суть, и слушаем время заново
+                        // v8.22: «напомни» без времени — переспрашиваем, сохранив суть, слушаем время
                         pendingReminderText = p.title
                         VoiceAccessibilityService.instance?.showStatus("🔔 На какое время напомнить?")
                         speak("На какое время напомнить?")
-                        planKind = "reminder"; planning = true; aiListening = true; aiAsk = false
-                        restartListening(); resetIdle()
+                        planKind = "reminder"
+                        // v8.23: время ловим тоже через Whisper (точные цифры), иначе Vosk
+                        if (CloudStt.isConfigured(this) && Net.isOnline(this)) {
+                            startCloudCapture(false, "plan")
+                        } else {
+                            planning = true; aiListening = true; aiAsk = false
+                            restartListening(); resetIdle()
+                        }
                     } else {
                         speak("Не получилось: ${p.error}. Повторите по-другому.")
                         VoiceAccessibilityService.instance?.showStatus("Не понял: ${p.error}")
@@ -1665,11 +1691,16 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     fun startQuery() {
+        aiAsk = false
+        Logger.log("SEC", "Захват вопроса к памяти")
+        // v8.23: вопрос к памяти через Whisper (точно), иначе Vosk.
+        if (CloudStt.isConfigured(this) && Net.isOnline(this)) {
+            startCloudCapture(false, "memory")
+            return
+        }
         querying = true
         aiListening = true
-        aiAsk = false
         VoiceAccessibilityService.instance?.showStatus("📋 Слушаю вопрос по делам…")
-        Logger.log("SEC", "Захват вопроса к памяти")
         restartListening()
         resetIdle()
     }
@@ -1717,6 +1748,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         val raw = hypothesis?.let { JSONObject(it).optString("text") } ?: return
         val text = normalize(raw.replace("[unk]", " "))
         if (text.isBlank()) return
+        // v8.23: во время облачной записи (Whisper) Vosk остановлен — но на случай гонки игнорируем
+        // запоздалый Vosk-финал, чтобы он не попал в обычную обработку команд.
+        if (cloudCapturing) { Logger.log("REC", "Игнор (идёт облачный захват): '$text'"); return }
         Logger.log("HEARD", "'$text' | state=$state media=$mediaControlMode dict=$dictation digits=$dictationDigits call=${inCall()} mode=${audioModeName()} tel=${telStateName()}")
         heardWakeInUtterance = text.contains(wakeWord)   // фиксируем ДО любого вырезания «иван»
 
@@ -2211,7 +2245,8 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             val clearTask = (text.contains("очисти") && (text.contains("выполнен") || hasTask)) ||
                 (text.contains("удали") && text.contains("выполнен"))
             val doneTask = (hasTask && (text.contains("заверши") || text.contains("закро") ||
-                text.contains("закрыть") || text.contains("отметь") || text.contains("выполн"))) ||
+                text.contains("закрыть") || text.contains("отметь") || text.contains("выполн") ||
+                text.contains("удали") || text.contains("убери") || text.contains("удалить"))) ||
                 text.trim() == "выполнено" || text.trim() == "готово"
             val agendaTriggers = listOf("повестка", "повестку", "мои дела", "все дела", "что по плану")
             val remindersList = listOf("мои напоминания", "какие напоминания", "список напоминаний",

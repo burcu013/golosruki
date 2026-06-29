@@ -52,16 +52,29 @@ object Secretary {
             "Известные проекты: $projects. Известные люди: $people."
         val user = "Текущие дата и время: $nowStr. Фраза: \"$text\""
 
-        // v8.19: облако с быстрым дедлайном (8с), при недоступности (429/таймаут/офлайн) — ОТКАТ на
-        // локальную модель. Раньше plan() падал на CloudAi с ошибкой и НЕ пробовал офлайн (баг #5).
+        // v8.21: ГИБРИДНЫЙ разбор. Приоритет:
+        //   1) Облако (tryCloud 8с) — лучшее качество, сопоставление проектов/людей.
+        //   2) Локальный ДЕТЕРМИНИРОВАННЫЙ разбор (localParse) — regex по русским датам/времени/повтору.
+        //      Мгновенно, без 30-секундной локальной LLM, никогда не выдаёт мусор. Покрывает явные фразы
+        //      («сегодня», «завтра в 9», «через час», «каждый день»). Для task почти всегда достаточен.
+        //   3) Локальная LLM (generateRaw) — последний шанс, если localParse не уверен (нет даты для event).
+        // Раньше (8.20) при 429 шли сразу в локальную LLM — она плохо держит JSON и выдавала мусор
+        // («посчитать зарплату» → «не понял»). Детерминированный разбор это чинит.
         val online = CloudAi.isConfigured(ctx) && Net.isOnline(ctx)
         var raw: String? = null
         if (online) {
             raw = LocalAi.tryCloud(8000) { CloudAi.chat(ctx, system, user) }
-            if (raw.isNullOrBlank()) Logger.log("SEC", "Планировщик: облако недоступно/429 — откат на локальную модель")
+            if (raw.isNullOrBlank()) Logger.log("SEC", "Планировщик: облако недоступно/429 — локальный разбор")
         }
         if (raw.isNullOrBlank()) {
+            // 2) детерминированный разбор — строит тот же JSON-формат, что и облако
+            raw = localParse(text, hintKind, now)
+            if (!raw.isNullOrBlank()) Logger.log("SEC", "Планировщик: разобрано локально (без модели)")
+        }
+        if (raw.isNullOrBlank()) {
+            // 3) локальная LLM — крайний случай
             raw = LocalAi.generateRaw(ctx, system, user, preferSmart = true)
+            if (!raw.isNullOrBlank()) Logger.log("SEC", "Планировщик: разобрано локальной моделью")
         }
         if (raw.isNullOrBlank()) {
             return PlanResult(false, "", "", "", "", 60, 0, 0, false,
@@ -220,6 +233,139 @@ object Secretary {
         val sb = StringBuilder("$greet. $events $tasksStr$overdueStr")
         if (weather != null) sb.append(" Погода: $weather")
         return sb.toString()
+    }
+
+    /**
+     * v8.21: ДЕТЕРМИНИРОВАННЫЙ локальный разбор фразы в JSON (тот же формат, что отдаёт облако).
+     * Без LLM — regex/словарь по русской речи. Мгновенно и без мусора. Возвращает JSON-строку или null
+     * (если совсем ничего не вытащил — тогда выше попробуют локальную LLM).
+     * Покрывает явные случаи; хитрые формулировки оставляем облаку/LLM.
+     */
+    private fun localParse(text: String, hintKind: String, now: Calendar): String? {
+        val t = " " + text.lowercase(ru).trim() + " "
+        val cal = now.clone() as Calendar
+        cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
+        var hasDate = false
+        var hasTime = false
+        var repeatMin = 0
+
+        // --- ПОВТОР ---
+        when {
+            Regex("кажд\\w* день|ежедневн").containsMatchIn(t) -> { repeatMin = 1440 }
+            Regex("кажд\\w* недел|еженедельн").containsMatchIn(t) -> { repeatMin = 10080 }
+            Regex("кажд\\w* час|ежечасн").containsMatchIn(t) -> { repeatMin = 60 }
+            else -> {
+                Regex("кажд\\w* (\\d+) (минут|час)").find(t)?.let { m ->
+                    val n = m.groupValues[1].toIntOrNull() ?: 0
+                    repeatMin = if (m.groupValues[2].startsWith("час")) n * 60 else n
+                }
+            }
+        }
+
+        // --- ОТНОСИТЕЛЬНАЯ ДАТА ---
+        when {
+            t.contains("послезавтра") -> { cal.add(Calendar.DAY_OF_YEAR, 2); hasDate = true }
+            t.contains("завтра") -> { cal.add(Calendar.DAY_OF_YEAR, 1); hasDate = true }
+            t.contains("сегодня") -> { hasDate = true }
+            else -> {
+                // «через N часов/минут» — от текущего момента
+                Regex("через (\\d+|час|полчаса|минут\\w*) ?(час\\w*|минут\\w*)?").find(t)?.let { m ->
+                    val g1 = m.groupValues[1]; val g2 = m.groupValues[2]
+                    when {
+                        g1 == "час" || g2.startsWith("час") -> {
+                            val n = g1.toIntOrNull() ?: 1
+                            cal.add(Calendar.HOUR_OF_DAY, n); hasDate = true; hasTime = true
+                        }
+                        g1 == "полчаса" -> { cal.add(Calendar.MINUTE, 30); hasDate = true; hasTime = true }
+                        g2.startsWith("минут") -> {
+                            val n = g1.toIntOrNull() ?: 0
+                            if (n > 0) { cal.add(Calendar.MINUTE, n); hasDate = true; hasTime = true }
+                        }
+                    }
+                }
+                // «через N дней/недель»
+                Regex("через (\\d+) (дн\\w*|недел\\w*)").find(t)?.let { m ->
+                    val n = m.groupValues[1].toIntOrNull() ?: 0
+                    if (m.groupValues[2].startsWith("недел")) cal.add(Calendar.DAY_OF_YEAR, n * 7)
+                    else cal.add(Calendar.DAY_OF_YEAR, n)
+                    hasDate = true
+                }
+                // «через неделю» без числа
+                if (!hasDate && Regex("через недел\\w*").containsMatchIn(t)) { cal.add(Calendar.DAY_OF_YEAR, 7); hasDate = true }
+                // День недели: «в понедельник» … — ближайший будущий
+                if (!hasDate) {
+                    val dows = listOf("воскресенье" to Calendar.SUNDAY, "понедельник" to Calendar.MONDAY,
+                        "вторник" to Calendar.TUESDAY, "сред" to Calendar.WEDNESDAY, "четверг" to Calendar.THURSDAY,
+                        "пятниц" to Calendar.FRIDAY, "суббот" to Calendar.SATURDAY)
+                    for ((word, dow) in dows) {
+                        if (t.contains(" $word") || t.contains("в $word") || t.contains("во $word")) {
+                            var add = (dow - cal.get(Calendar.DAY_OF_WEEK) + 7) % 7
+                            if (add == 0) add = 7   // «в понедельник», когда сегодня понедельник → следующий
+                            cal.add(Calendar.DAY_OF_YEAR, add); hasDate = true; break
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- ВРЕМЯ (если ещё не задано через «через N часов») ---
+        if (!hasTime) {
+            // «в 9», «в 14:30», «в 9 утра/вечера»
+            val tm = Regex("в (\\d{1,2})[:.](\\d{2})").find(t) ?: Regex("в (\\d{1,2}) (час\\w*|утра|вечера|дня|ночи)?").find(t)
+            if (tm != null) {
+                var h = tm.groupValues[1].toIntOrNull() ?: -1
+                val mn = tm.groupValues.getOrNull(2)?.toIntOrNull() ?: 0
+                val suffix = tm.groupValues.getOrNull(2) ?: ""
+                if (h in 0..23) {
+                    // «вечера»/«дня» → +12 для 1..11
+                    if ((suffix == "вечера" || suffix == "дня") && h in 1..11) h += 12
+                    if (suffix == "ночи" && h == 12) h = 0
+                    cal.set(Calendar.HOUR_OF_DAY, h)
+                    cal.set(Calendar.MINUTE, if (mn in 0..59) mn else 0)
+                    hasTime = true
+                    if (!hasDate) hasDate = true   // время названо без даты — считаем сегодня
+                }
+            } else {
+                // словесное время суток
+                when {
+                    t.contains("утром") || t.contains(" утра") -> { cal.set(Calendar.HOUR_OF_DAY, 10); cal.set(Calendar.MINUTE, 0); hasTime = true; if (!hasDate) hasDate = true }
+                    t.contains("днём") || t.contains("днем") -> { cal.set(Calendar.HOUR_OF_DAY, 14); cal.set(Calendar.MINUTE, 0); hasTime = true; if (!hasDate) hasDate = true }
+                    t.contains("вечером") -> { cal.set(Calendar.HOUR_OF_DAY, 19); cal.set(Calendar.MINUTE, 0); hasTime = true; if (!hasDate) hasDate = true }
+                }
+            }
+        }
+
+        // --- ЗАГОЛОВОК: чистим служебные слова даты/времени/повтора ---
+        var title = text.trim()
+        val strip = listOf(
+            "\\bпослезавтра\\b", "\\bзавтра\\b", "\\bсегодня\\b", "\\bобязательно\\b",
+            "через \\d+ (?:дн\\w*|недел\\w*|час\\w*|минут\\w*)", "через недел\\w*", "через час\\w*", "через полчаса",
+            "в \\d{1,2}[:.]\\d{2}", "в \\d{1,2} (?:час\\w*|утра|вечера|дня|ночи)", "в \\d{1,2}\\b",
+            "кажд\\w* день", "кажд\\w* недел\\w*", "кажд\\w* час", "ежедневн\\w*", "еженедельн\\w*",
+            "утром", "вечером", "днём", "днем", "\\bв понедельник\\b", "\\bво вторник\\b", "\\bв среду\\b",
+            "\\bв четверг\\b", "\\bв пятницу\\b", "\\bв субботу\\b", "\\bв воскресенье\\b"
+        )
+        for (p in strip) title = title.replace(Regex(p, RegexOption.IGNORE_CASE), " ")
+        title = title.replace(Regex("\\s+"), " ").trim().trimStart(',', '.', ' ').trim()
+        if (title.isBlank()) title = text.trim()   // если вычистили всё — вернём исходное
+
+        // если совсем ничего не распознали (ни даты, ни повтора) и это event — пусть пробует LLM
+        if (!hasDate && repeatMin == 0 && hintKind == "event") return null
+
+        // Собираем JSON в формате облака
+        val date = if (hasDate) SimpleDateFormat("yyyy-MM-dd", ru).format(cal.time) else ""
+        val time = if (hasTime) SimpleDateFormat("HH:mm", ru).format(cal.time) else ""
+        val obj = JSONObject()
+        obj.put("title", title)
+        obj.put("person", "")
+        obj.put("project", "")
+        obj.put("date", date)
+        obj.put("time", time)
+        obj.put("duration_min", 60)
+        obj.put("reminder_min", 0)
+        obj.put("repeat_min", repeatMin)
+        obj.put("note", "")
+        return obj.toString()
     }
 
     private fun extractJson(s: String): JSONObject? {

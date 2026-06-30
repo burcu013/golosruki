@@ -931,6 +931,19 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         if (wantHeadsetMic() != btScoOn) restartListening()
     }
 
+    /** v8.25: ЕДИНАЯ гарантия возврата к слушанию команд после ЛЮБОГО исхода захвата (успех/пусто/
+     *  ошибка/таймаут). Безусловно перезапускает Vosk — в отличие от refreshMicForState, который
+     *  перезапускал только при смене BT-микрофона (на встроенном микрофон оставался мёртвым → 5 мин
+     *  тишины). Сбрасывает все флаги захвата, чтобы не было самозапуска второго захвата. */
+    private fun returnToListening() {
+        cloudCapturing = false
+        aiListening = false; aiDialog = false; planning = false; querying = false
+        updateMusicDuck()
+        VoiceAccessibilityService.instance?.showStatus(stateText())
+        restartListening()   // БЕЗУСЛОВНО возвращаем Vosk
+        resetIdle()
+    }
+
     /** v8.19: музыку ставим на ПАУЗУ, когда приложение реально слушает команду/вопрос (а не приглушаем
      *  фокусом — этот плеер фокус не возвращает). Условие: идёт приём (AWAKE / захват / звонок). В ASLEEP
      *  (ждём только вейк-слово) музыку НЕ трогаем — иначе стояла бы на паузе постоянно. */
@@ -1118,10 +1131,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             post {
                 cloudCapturing = false
                 if (text.isNullOrBlank()) {
-                    // Реально ничего не записалось/не распозналось (тишина) — сообщаем, не зацикливаем.
+                    // Реально ничего не записалось/не распозналось (тишина). Возвращаемся к слушанию
+                    // БЕЗУСЛОВНО (refreshMicForState на встроенном мике микрофон не возвращал → 5 мин тишины).
                     Logger.log("STT", "Пусто (нет речи): ${CloudStt.lastError}")
-                    VoiceAccessibilityService.instance?.showStatus(stateText())
-                    refreshMicForState(); resetIdle()
+                    returnToListening()
                 } else {
                     Logger.log("STT", "$source: '$text'")
                     when (mode) {
@@ -1424,26 +1437,30 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             } else ""
             post {
                 aiThinking = false
-                restartListening(); resetIdle()
                 if (!p.ok) {
                     if (p.error == "need_time") {
-                        // v8.22: «напомни» без времени — переспрашиваем, сохранив суть, слушаем время
+                        // «напомни» без времени — переспрашиваем, сохранив суть. Запись стартует ПОСЛЕ
+                        // того как Иван договорил (speakThen), микрофон не ловит свой синтез. Vosk НЕ
+                        // перезапускаем — startCloudCapture сам управляет микрофоном.
                         pendingReminderText = p.title
-                        VoiceAccessibilityService.instance?.showStatus("🔔 На какое время напомнить?")
                         planKind = "reminder"
-                        // v8.24: запись стартует ПОСЛЕ того как Иван договорил (иначе запишет свой голос)
+                        VoiceAccessibilityService.instance?.showStatus("🔔 На какое время напомнить?")
                         speakThen("На какое время напомнить?") { startCloudCapture(false, "plan") }
                     } else {
                         speak("Не получилось: ${p.error}. Повторите по-другому.")
                         VoiceAccessibilityService.instance?.showStatus("Не понял: ${p.error}")
+                        returnToListening()
                     }
                 } else if (p.kind == "task") {
-                    addPlannedTask(p)   // задачу добавляем сразу, без «да/нет»
+                    addPlannedTask(p)        // задачу добавляем сразу, без «да/нет»
+                    returnToListening()
                 } else {
+                    // событие/напоминание — ждём подтверждения «да/нет». Vosk нужен, чтобы услышать ответ,
+                    // НО открываем его ПОСЛЕ установки pendingPlan (иначе хвост речи ловится как новая команда).
                     pendingPlan = p
                     val card = Secretary.confirmPhrase(p).removeSuffix(" Скажите да или нет.")
                     VoiceAccessibilityService.instance?.showStatusHold("$conflict$card\nСкажите «да» или «нет»", 7, 31000)
-                    speak(conflict + Secretary.confirmPhrase(p))
+                    speakThen(conflict + Secretary.confirmPhrase(p)) { restartListening(); resetIdle() }
                     handler.postDelayed({ if (pendingPlan === p) { pendingPlan = null; Logger.log("SEC", "Подтверждение истекло") } }, 30000)
                 }
             }
@@ -1715,7 +1732,7 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     }
 
     private fun handleQuery(question: String) {
-        if (question.isBlank()) { restartListening(); resetIdle(); return }
+        if (question.isBlank()) { returnToListening(); return }
         aiThinking = true
         handler.removeCallbacks(idleRunnable)
         VoiceAccessibilityService.instance?.showStatus("📋 Смотрю в памяти…")
@@ -1724,10 +1741,10 @@ class VoiceRecognitionService : Service(), RecognitionListener {
             val ans = Secretary.answer(this, question)
             post {
                 aiThinking = false
-                speak(ans)
                 holdAnswer(ans)
                 VoiceAccessibilityService.instance?.showStatusHold("🧠 " + formatForScreen(ans), 26, 0L)
-                restartListening(); resetIdle()
+                // микрофон возвращаем ПОСЛЕ озвучки ответа (иначе Vosk ловит свой синтез)
+                speakThen(ans) { returnToListening() }
             }
         }.start()
     }

@@ -15,11 +15,33 @@ object MicRecorder {
 
     private const val RATE = 16000
 
+    /** v8.24: результат записи — WAV (для облака) и сырой PCM16 (для офлайн-Vosk того же звука). */
+    data class Capture(val wav: ByteArray, val pcm: ByteArray)
+
+    /** Записать сегмент и вернуть и WAV, и PCM (чтобы при недоступности облака распознать ТОТ ЖЕ звук
+     *  офлайн-Vosk без повторной записи). null — нет речи/ошибка. */
+    fun recordCapture(
+        maxMs: Int = 15000,
+        silenceMs: Int = 1200,
+        startTimeoutMs: Int = 6000,
+        sensitivity: Int = 5
+    ): Capture? {
+        val pcm = recordPcm(maxMs, silenceMs, startTimeoutMs, sensitivity) ?: return null
+        return Capture(wrapWav(pcm), pcm)
+    }
+
     fun recordWav(
-        maxMs: Int = 15000,        // максимум записи
-        silenceMs: Int = 1200,     // тишина после речи → стоп
-        startTimeoutMs: Int = 6000, // не начал говорить → отмена
-        sensitivity: Int = 5       // 1..10, выше = ловит более тихую речь (ниже порог)
+        maxMs: Int = 15000,
+        silenceMs: Int = 1200,
+        startTimeoutMs: Int = 6000,
+        sensitivity: Int = 5
+    ): ByteArray? = recordPcm(maxMs, silenceMs, startTimeoutMs, sensitivity)?.let { wrapWav(it) }
+
+    private fun recordPcm(
+        maxMs: Int,
+        silenceMs: Int,
+        startTimeoutMs: Int,
+        sensitivity: Int
     ): ByteArray? {
         val minBuf = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (minBuf <= 0) return null
@@ -88,7 +110,7 @@ object MicRecorder {
             rec.stop()
             val data = pcm.toByteArray()
             if (!started || data.size < RATE) return null            // < 0.5 с полезного звука
-            wrapWav(data)
+            data   // сырой PCM16 mono; WAV-обёртка делается снаружи (wrapWav)
         } catch (e: Exception) {
             Logger.log("STT", "Ошибка записи: ${e.message}"); null
         } finally {

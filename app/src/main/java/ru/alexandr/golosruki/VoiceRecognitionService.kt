@@ -1099,6 +1099,9 @@ class VoiceRecognitionService : Service(), RecognitionListener {
      *  mode: "ai_ask" | "ai_compose" | "plan" | "memory". При пустом Whisper — откат на Vosk-захват
      *  в том же режиме (плохая сеть/429 не теряет ввод). */
     private fun startCloudCapture(ask: Boolean, mode: String = "ai_ask") {
+        // v8.27: ЗАМОК от гонок — пока идёт захват, второй НЕ стартует (иначе «слушаю» на «слушаю»,
+        // два AudioRecord на один микрофон → каша и отвал). Игнорируем повторный вызов.
+        if (cloudCapturing) { Logger.log("STT", "Захват уже идёт — повторный запуск отклонён ($mode)"); return }
         cloudCapturing = true
         captureMode = mode
         handler.removeCallbacks(idleRunnable)
@@ -1107,34 +1110,35 @@ class VoiceRecognitionService : Service(), RecognitionListener {
         Logger.log("STT", "Захват ($mode)")
         listeningStop()   // освободить микрофон от Vosk
         Thread {
-            // v8.24: БЕЗ задержки sleep(200) — она съедала начало фразы (пред-ролл 600мс в MicRecorder
-            // и так защищает первый слог). Запись стартует сразу.
-            val cap = MicRecorder.recordCapture(
-                maxMs = SettingsStore.getVadMaxMs(this),
-                silenceMs = SettingsStore.getVadSilenceMs(this),
-                sensitivity = SettingsStore.getVadSensitivity(this)
-            )
-            // Онлайн: Whisper по WAV. Если облако недоступно/пусто — НЕ переслушиваем, а распознаём
-            // ТОТ ЖЕ записанный звук офлайн-Vosk (один и тот же PCM). Повтора фразы нет.
             var text: String? = null
             var source = ""
-            if (cap != null) {
-                if (CloudStt.isConfigured(this) && Net.isOnline(this)) {
-                    text = CloudStt.transcribe(this, cap.wav)
-                    if (!text.isNullOrBlank()) source = "Whisper"
+            try {
+                // v8.24: БЕЗ задержки sleep(200) — пред-ролл 600мс в MicRecorder защищает первый слог.
+                val cap = MicRecorder.recordCapture(
+                    maxMs = SettingsStore.getVadMaxMs(this),
+                    silenceMs = SettingsStore.getVadSilenceMs(this),
+                    sensitivity = SettingsStore.getVadSensitivity(this)
+                )
+                // Онлайн: Whisper по WAV. Если облако недоступно/пусто — распознаём ТОТ ЖЕ звук
+                // офлайн-Vosk (один PCM), без повтора фразы.
+                if (cap != null) {
+                    if (CloudStt.isConfigured(this) && Net.isOnline(this)) {
+                        text = CloudStt.transcribe(this, cap.wav)
+                        if (!text.isNullOrBlank()) source = "Whisper"
+                    }
+                    if (text.isNullOrBlank()) {
+                        text = transcribeOffline(cap.pcm)
+                        if (!text.isNullOrBlank()) source = "Vosk-офлайн"
+                    }
                 }
-                if (text.isNullOrBlank()) {
-                    text = transcribeOffline(cap.pcm)   // тот же звук → Vosk, без новой записи
-                    if (!text.isNullOrBlank()) source = "Vosk-офлайн"
-                }
+            } catch (e: Exception) {
+                Logger.log("STT", "Ошибка захвата: ${e.message}")   // замок всё равно снимется ниже
             }
             post {
-                cloudCapturing = false
+                cloudCapturing = false   // ЗАМОК снимается ВСЕГДА (успех/пусто/исключение)
                 if (text.isNullOrBlank()) {
-                    // Реально ничего не записалось/не распозналось (тишина). Возвращаемся к слушанию
-                    // БЕЗУСЛОВНО (refreshMicForState на встроенном мике микрофон не возвращал → 5 мин тишины).
                     Logger.log("STT", "Пусто (нет речи): ${CloudStt.lastError}")
-                    returnToListening()
+                    returnToListening()   // безусловный возврат микрофона
                 } else {
                     Logger.log("STT", "$source: '$text'")
                     when (mode) {
@@ -1403,21 +1407,18 @@ class VoiceRecognitionService : Service(), RecognitionListener {
     // ===== Секретарь (этап A) =====
 
     /** Старт свободного захвата плана. Требует онлайн-модель. */
-    fun startPlanQuery(kind: String = "event") {
-        if (!(CloudAi.isConfigured(this) && Net.isOnline(this))) {
-            VoiceAccessibilityService.instance?.showStatus("📝 Для секретаря нужны онлайн-модель и интернет")
-            speak("Для планирования нужна онлайн-модель и интернет. Включите её в настройках.")
-            return
-        }
+    fun startPlanQuery(kind: String = "event", inlineText: String = "") {
         planKind = kind
         aiAsk = false
+        // v8.27: ВСЕГДА пишем через startCloudCapture (Whisper точный — в логе «Сегодня в 9 вечера
+        // посчитать зарплату» распознано идеально). Инлайн-суть от Vosk (8.26) НЕ берём — Vosk коверкает
+        // свободную речь («сорок прочитай»). inlineText игнорируем намеренно.
         Logger.log("SEC", "Захват ($kind)")
-        // v8.24: захват всегда через startCloudCapture — Whisper онлайн или Vosk офлайн по тому же звуку.
         startCloudCapture(false, "plan")
     }
 
     private fun handlePlan(text: String) {
-        if (text.isBlank()) { restartListening(); resetIdle(); return }
+        if (text.isBlank()) { returnToListening(); return }
         aiThinking = true
         handler.removeCallbacks(idleRunnable)
         VoiceAccessibilityService.instance?.showStatus("📝 Обрабатываю…")
